@@ -223,7 +223,6 @@ jobs:
       - name: Validate Buildozer
         run: |
           buildozer version
-          buildozer android clean
 
           echo "Buildozer validation stage: PASS"
 
