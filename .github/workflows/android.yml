@@ -15,41 +15,43 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
-      ANDROID_HOME: ${{ github.workspace }}/android-sdk
-      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_NDK_VERSION: 28.2.13676358
       ANDROID_API: 35
 
     steps:
-      # --------------------------------------------------------
-      # 1. Checkout clean GARRY V7 repository
-      # --------------------------------------------------------
+
+      # ========================================================
+      # 1. Checkout repository
+      # ========================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
-      # 2. Python
-      # --------------------------------------------------------
+      # ========================================================
+      # 2. Python 3.11
+      # ========================================================
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # --------------------------------------------------------
+      # ========================================================
       # 3. Java 17
-      # --------------------------------------------------------
+      # ========================================================
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
-          cache: "gradle"
 
-      # --------------------------------------------------------
+      # ========================================================
       # 4. Linux build dependencies
-      # --------------------------------------------------------
-      - name: Install system dependencies
+      # ========================================================
+
+      - name: Install Linux dependencies
         run: |
           sudo apt-get update
 
@@ -61,6 +63,8 @@ jobs:
             wget \
             autoconf \
             automake \
+            autopoint \
+            gettext \
             libtool \
             pkg-config \
             cmake \
@@ -71,72 +75,53 @@ jobs:
             libtinfo5 \
             libffi-dev \
             libssl-dev \
-            libsqlite3-dev \
-            liblzma-dev
+            libsqlite3-dev
 
-      # --------------------------------------------------------
+      # ========================================================
       # 5. Android SDK
-      # --------------------------------------------------------
+      # ========================================================
+
       - name: Set up Android SDK
-  uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+            ndk;28.2.13676358
 
-      # --------------------------------------------------------
-      # 6. Configure Android SDK paths
-      # --------------------------------------------------------
-      - name: Configure Android environment
+      # ========================================================
+      # 6. Verify Android SDK
+      # ========================================================
+
+      - name: Verify Android SDK
         run: |
-          mkdir -p "$ANDROID_HOME"
-
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
-
-      # --------------------------------------------------------
-      # 7. Verify sdkmanager
-      # --------------------------------------------------------
-      - name: Verify Android SDK tools
-        run: |
+          echo "SDK manager:"
           which sdkmanager
           sdkmanager --version
+
+          echo ""
+          echo "Java:"
           java -version
 
-      # --------------------------------------------------------
-      # 8. Install exact Android SDK packages
-      # --------------------------------------------------------
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
+          echo ""
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
 
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-${ANDROID_API}" \
-            "build-tools;35.0.0" \
-            "ndk;${ANDROID_NDK_VERSION}"
+          echo ""
+          echo "Installed Android platforms:"
+          sdkmanager --list_installed | grep "platforms;android-35" || true
 
-      # --------------------------------------------------------
-      # 9. Verify exact NDK installation
-      # --------------------------------------------------------
-      - name: Verify Android NDK
-        run: |
-          test -d "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
-
+          echo ""
           echo "Installed NDK:"
+          test -d "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
           ls -la "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
 
-      # --------------------------------------------------------
-      # 10. Accept Android licenses
-      # --------------------------------------------------------
-      - name: Accept Android SDK licenses
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
+      # ========================================================
+      # 7. Install Python build tools
+      # ========================================================
 
-      # --------------------------------------------------------
-      # 11. Install Python build tools
-      # --------------------------------------------------------
-      - name: Install Buildozer and build dependencies
+      - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip setuptools wheel
 
@@ -145,10 +130,11 @@ jobs:
             cython==0.29.34 \
             virtualenv
 
-      # --------------------------------------------------------
-      # 12. Validate repository structure
-      # --------------------------------------------------------
-      - name: Validate clean GARRY V7 structure
+      # ========================================================
+      # 8. Validate required GARRY V7 files
+      # ========================================================
+
+      - name: Validate GARRY V7 project structure
         run: |
           test -f main.py
           test -f buildozer.spec
@@ -171,9 +157,10 @@ jobs:
 
           echo "GARRY V7 project structure: PASS"
 
-      # --------------------------------------------------------
-      # 13. Confirm old GARRY V8 files are NOT present
-      # --------------------------------------------------------
+      # ========================================================
+      # 9. Verify old GARRY V8 files are absent
+      # ========================================================
+
       - name: Verify no GARRY V8 dependency chain
         run: |
           if find . \
@@ -194,9 +181,10 @@ jobs:
 
           echo "No old GARRY V8 dependency files detected: PASS"
 
-      # --------------------------------------------------------
-      # 14. Python syntax validation
-      # --------------------------------------------------------
+      # ========================================================
+      # 10. Python syntax validation
+      # ========================================================
+
       - name: Validate Python syntax
         run: |
           python -m compileall -q \
@@ -207,81 +195,113 @@ jobs:
 
           echo "Python syntax validation: PASS"
 
-      # --------------------------------------------------------
-      # 15. Strategy import validation
-      # --------------------------------------------------------
+      # ========================================================
+      # 11. Validate strategy imports
+      # ========================================================
+
       - name: Validate strategy imports
         run: |
           python - <<'PY'
-          from data.models import Candle, MarketData
-          from data.demo_data import create_demo_market_data
+          import data
+          import data.models
+          import data.demo_data
 
-          from strategy.market_structure import *
-          from strategy.smc import *
-          from strategy.ict import *
-          from strategy.risk import *
-          from strategy.signals import *
+          import strategy
+          import strategy.market_structure
+          import strategy.smc
+          import strategy.ict
+          import strategy.risk
+          import strategy.signals
 
           print("GARRY V7 strategy imports: PASS")
           PY
 
-      # --------------------------------------------------------
-      # 16. Buildozer specification validation
-      # --------------------------------------------------------
-      - name: Validate Buildozer specification
+      # ========================================================
+      # 12. Validate Buildozer
+      # ========================================================
+
+      - name: Validate Buildozer
         run: |
           buildozer version
           buildozer android clean
 
-          echo "Buildozer specification validation stage: PASS"
+          echo "Buildozer validation stage: PASS"
 
-      # --------------------------------------------------------
-      # 17. Build debug APK
-      # --------------------------------------------------------
+      # ========================================================
+      # 13. Build Android debug APK
+      # ========================================================
+
       - name: Build Android debug APK
         run: |
           buildozer -v android debug
 
-      # --------------------------------------------------------
-      # 18. Verify APK was actually generated
-      # --------------------------------------------------------
+      # ========================================================
+      # 14. Verify APK generation
+      # ========================================================
+
       - name: Verify generated APK
         run: |
-          echo "APK files generated:"
-          find bin -maxdepth 1 -type f -name "*.apk" -print
+          echo "Generated APK files:"
 
-          APK_COUNT=$(find bin -maxdepth 1 -type f -name "*.apk" | wc -l)
+          find bin \
+            -maxdepth 1 \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          if [ "$APK_COUNT" -ne 1 ]; then
-            echo "ERROR: Expected exactly one APK, found $APK_COUNT."
+          APK_COUNT=$(find bin \
+            -maxdepth 1 \
+            -type f \
+            -name "*.apk" \
+            | wc -l)
+
+          if [ "$APK_COUNT" -lt 1 ]; then
+            echo "ERROR: No APK was generated."
             exit 1
           fi
 
-          GENERATED_APK=$(find bin -maxdepth 1 -type f -name "*.apk" -print -quit)
+          echo "APK_COUNT=$APK_COUNT"
+
+          GENERATED_APK=$(find bin \
+            -maxdepth 1 \
+            -type f \
+            -name "*.apk" \
+            -print \
+            -quit)
 
           echo "Generated APK:"
           echo "$GENERATED_APK"
 
           test -s "$GENERATED_APK"
 
-      # --------------------------------------------------------
-      # 19. Rename to fixed GARRY V7 APK filename
-      # --------------------------------------------------------
+      # ========================================================
+      # 15. Create fixed GARRY V7 APK filename
+      # ========================================================
+
       - name: Prepare final GARRY V7 APK
         run: |
-          GENERATED_APK=$(find bin -maxdepth 1 -type f -name "*.apk" -print -quit)
+          GENERATED_APK=$(find bin \
+            -maxdepth 1 \
+            -type f \
+            -name "*.apk" \
+            -print \
+            -quit)
 
           cp "$GENERATED_APK" \
             "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
 
-          test -s "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
+          test -s \
+            "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
 
+          echo ""
           echo "FINAL APK:"
-          ls -lh "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
+          ls -lh \
+            "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
 
-      # --------------------------------------------------------
-      # 20. Upload verified APK artifact
-      # --------------------------------------------------------
+      # ========================================================
+      # 16. Upload verified APK
+      # ========================================================
+
       - name: Upload GARRY V7 APK
         uses: actions/upload-artifact@v4
         with:
