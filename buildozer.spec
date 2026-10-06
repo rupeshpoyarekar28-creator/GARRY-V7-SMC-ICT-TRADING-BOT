@@ -59,7 +59,7 @@ android.accept_sdk_license = True
 # ============================================================
 # BUILD CONFIGURATION
 # ============================================================
-
+p4a.local_recipes = ./p4a_recipes
 [buildozer]
 
 # Buildozer log level
