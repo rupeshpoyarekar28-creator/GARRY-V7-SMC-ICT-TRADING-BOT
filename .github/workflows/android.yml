@@ -78,7 +78,7 @@ jobs:
       # 5. Android SDK
       # --------------------------------------------------------
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+  uses: android-actions/setup-android@v4
 
       # --------------------------------------------------------
       # 6. Configure Android SDK paths
