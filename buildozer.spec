@@ -1,52 +1,72 @@
 [app]
 
-# GARRY V7 application identity
+# ============================================================
+# GARRY V7 SMC ICT TRADING BOT
+# Clean, self-contained Android application
+# ============================================================
+
+# Application identity
 title = GARRY V7 SMC ICT TRADING BOT
 package.name = garryv7
 package.domain = com.garryv7
 
 # Source directory
 source.dir = .
+
+# Files to include in the APK
 source.include_exts = py,png,jpg,jpeg,kv,atlas
 
-# Python dependencies required by the application
+# Python runtime dependencies
 requirements = python3,kivy==2.3.1
 
 # Application entry point
-# main.py is the only application entry point.
-orientation = portrait
+# main.py is the ONLY application entry point.
+android.entrypoint = org.kivy.android.PythonActivity
 
-# Android application settings
-fullscreen = 0
-
-# Version
+# Application version
 version = 1.0.0
 
+# Screen orientation
+orientation = portrait
+
+# Fullscreen disabled
+fullscreen = 0
+
+
+# ============================================================
+# ANDROID CONFIGURATION
+# ============================================================
+
+# Target Android API
+android.api = 35
+
+# Minimum supported Android API
+android.minapi = 24
+
+# Android NDK
+android.ndk = 28c
+
+# NDK API
+android.ndk_api = 24
+
+# Build only for modern 64-bit Android devices
+android.archs = arm64-v8a
+
+# Automatically accept Android SDK licenses in CI
+android.accept_sdk_license = True
+
+
+# ============================================================
+# BUILD CONFIGURATION
+# ============================================================
 
 [buildozer]
 
-# Log level
+# Buildozer log level
 log_level = 2
 
-# Warning: do not use this build directory as source code.
-# Buildozer will create its own build files here.
+# Build directory
 build_dir = .buildozer
 
 # APK output directory
 bin_dir = bin
-
-
-[app:android]
-
-# Android API configuration
-android.api = 35
-android.minapi = 23
-
-# Android architecture
-android.archs = arm64-v8a
-
-# NDK version
-android.ndk = 28c
-
-# Accept Android SDK licenses during automated build
-android.accept_sdk_license = True
