@@ -45,6 +45,7 @@ android.minapi = 24
 
 # Android NDK
 android.ndk = 28c
+android.ndk_path = /usr/local/lib/android/sdk/ndk/28.2.13676358
 
 # NDK API
 android.ndk_api = 24
