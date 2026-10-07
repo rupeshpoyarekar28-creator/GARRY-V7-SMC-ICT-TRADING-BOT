@@ -5,8 +5,8 @@ class CharsetNormalizerRecipe(PythonRecipe):
     """
     GARRY V7 local python-for-android recipe for charset-normalizer.
 
-    Uses charset-normalizer 2.1.1 from source instead of allowing
-    pip/p4a to select an incompatible prebuilt Android wheel.
+    Builds charset-normalizer 2.1.1 from source instead of allowing
+    pip/python-for-android to select an incompatible Android wheel.
     """
 
     version = "2.1.1"
