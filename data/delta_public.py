@@ -7,6 +7,7 @@ STEP 3:
 - Exact 7 approved trading pairs
 - Live perpetual-futures validation
 - Dynamic contract specifications
+- Correct symbol-specific candle requests
 - No API key
 - No authentication
 - No order placement
@@ -22,10 +23,10 @@ from typing import Any, Optional
 
 BASE_URL = "https://api.india.delta.exchange"
 
-# ------------------------------------------------------------
-# LOCKED USER-APPROVED PAIRS
-# Do not add/remove symbols without explicit user approval.
-# ------------------------------------------------------------
+
+# ================================================================
+# LOCKED USER-APPROVED TRADING PAIRS
+# ================================================================
 
 APPROVED_SYMBOLS = (
     "BTCUSD",
@@ -37,6 +38,10 @@ APPROVED_SYMBOLS = (
     "UNIUSD",
 )
 
+
+# ================================================================
+# PRODUCT MODEL
+# ================================================================
 
 @dataclass
 class DeltaProduct:
@@ -68,12 +73,19 @@ class DeltaAPIError(Exception):
     """Raised when Delta public API communication fails."""
 
 
+# ================================================================
+# DELTA PUBLIC CLIENT
+# ================================================================
+
 class DeltaPublicClient:
     """
     Dependency-free Delta Exchange India public REST client.
 
+    Public data only.
+
     This client:
-    - reads public market/product data
+    - reads public market data
+    - reads public product specifications
     - validates approved contracts
     - never authenticates
     - never places orders
@@ -88,7 +100,7 @@ class DeltaPublicClient:
         self.timeout = timeout
 
     # ============================================================
-    # HTTP
+    # HTTP GET
     # ============================================================
 
     def _get(
@@ -96,6 +108,7 @@ class DeltaPublicClient:
         path: str,
         params: Optional[dict[str, Any]] = None,
     ) -> Any:
+
         if params:
             query = urllib.parse.urlencode(params)
             url = f"{self.base_url}{path}?{query}"
@@ -136,6 +149,7 @@ class DeltaPublicClient:
 
         try:
             payload = json.loads(raw)
+
         except json.JSONDecodeError as exc:
             raise DeltaAPIError(
                 "INVALID JSON RESPONSE FROM DELTA"
@@ -184,18 +198,22 @@ class DeltaPublicClient:
 
         return result
 
+    # ============================================================
+    # VALIDATE ONE APPROVED PRODUCT
+    # ============================================================
+
     def get_product(
         self,
         symbol: str,
     ) -> Optional[DeltaProduct]:
         """
-        Fetch and validate one product by symbol.
+        Find one approved symbol from the live-products list.
 
-        The product must be:
-        - approved
-        - perpetual_futures
-        - live
-        - operational
+        Requirements:
+        - symbol approved
+        - perpetual futures
+        - state live
+        - trading status operational
         """
 
         symbol = str(symbol).upper().strip()
@@ -203,40 +221,42 @@ class DeltaPublicClient:
         if symbol not in APPROVED_SYMBOLS:
             return None
 
-        try:
-            payload = self._get(
-                f"/v2/products/{urllib.parse.quote(symbol)}"
-            )
-        except DeltaAPIError:
-            return None
+        products = self.get_products()
 
-        raw = payload.get("result")
+        for raw in products:
 
-        if not isinstance(raw, dict):
-            return None
+            if not isinstance(raw, dict):
+                continue
 
-        if raw.get("symbol") != symbol:
-            return None
+            if str(
+                raw.get("symbol", "")
+            ).upper() != symbol:
+                continue
 
-        if raw.get("contract_type") != "perpetual_futures":
-            return None
+            if raw.get("contract_type") != "perpetual_futures":
+                return None
 
-        if raw.get("state") != "live":
-            return None
+            if raw.get("state") != "live":
+                return None
 
-        if raw.get("trading_status") != "operational":
-            return None
+            if raw.get("trading_status") != "operational":
+                return None
 
-        return self._parse_product(raw)
+            return self._parse_product(raw)
+
+        return None
+
+    # ============================================================
+    # VALIDATE ALL 7 PRODUCTS
+    # ============================================================
 
     def get_approved_products(
         self,
     ) -> dict[str, DeltaProduct]:
         """
-        Validate all 7 locked symbols.
+        Validate all seven locked symbols.
 
-        Only valid/live/operational perpetual contracts
-        are returned.
+        Only products satisfying all conditions are returned.
         """
 
         products = self.get_products()
@@ -283,67 +303,87 @@ class DeltaPublicClient:
         try:
             return DeltaProduct(
                 product_id=int(raw["id"]),
-                symbol=str(raw["symbol"]),
-                description=str(
-                    raw.get("description", "")
+
+                symbol=str(
+                    raw["symbol"]
                 ),
+
+                description=str(
+                    raw.get(
+                        "description",
+                        "",
+                    )
+                ),
+
                 contract_type=str(
                     raw["contract_type"]
                 ),
+
                 state=str(
                     raw["state"]
                 ),
+
                 trading_status=str(
                     raw["trading_status"]
                 ),
+
                 contract_value=float(
                     raw["contract_value"]
                 ),
+
                 contract_unit_currency=str(
                     raw.get(
                         "contract_unit_currency",
                         "",
                     )
                 ),
+
                 tick_size=float(
                     raw["tick_size"]
                 ),
+
                 position_size_limit=float(
                     raw.get(
                         "position_size_limit",
                         0,
                     )
                 ),
+
                 default_leverage=float(
                     raw.get(
                         "default_leverage",
                         0,
                     )
                 ),
+
                 maker_commission_rate=float(
                     raw.get(
                         "maker_commission_rate",
                         0,
                     )
                 ),
+
                 taker_commission_rate=float(
                     raw.get(
                         "taker_commission_rate",
                         0,
                     )
                 ),
+
                 funding_method=str(
                     raw.get(
                         "funding_method",
                         "",
                     )
                 ),
+
                 annualized_funding=float(
                     raw.get(
                         "annualized_funding",
                         0,
                     )
                 ),
+
                 is_quanto=bool(
                     raw.get(
                         "is_quanto",
@@ -390,6 +430,12 @@ class DeltaPublicClient:
         start: Optional[int] = None,
         end: Optional[int] = None,
     ) -> dict[str, Any]:
+        """
+        Get candles for one approved symbol.
+
+        IMPORTANT:
+        Symbol is explicitly sent to Delta.
+        """
 
         symbol = str(symbol).upper().strip()
 
@@ -399,6 +445,7 @@ class DeltaPublicClient:
             )
 
         params: dict[str, Any] = {
+            "symbol": symbol,
             "resolution": resolution,
         }
 
@@ -414,16 +461,38 @@ class DeltaPublicClient:
         )
 
     # ============================================================
-    # CONNECTION TEST
+    # RECENT CANDLES
+    # ============================================================
+
+    def get_recent_candles(
+        self,
+        symbol: str,
+        resolution: str = "5m",
+        start: Optional[int] = None,
+        end: Optional[int] = None,
+    ) -> dict[str, Any]:
+
+        return self.get_candles(
+            symbol=symbol,
+            resolution=resolution,
+            start=start,
+            end=end,
+        )
+
+    # ============================================================
+    # PUBLIC CONNECTION TEST
     # ============================================================
 
     def test_public_connection(self) -> bool:
         """
-        Confirm Delta public API is reachable.
+        Confirm Delta public REST API is reachable.
         """
 
         try:
-            self.get_products(page_size=10)
+            self.get_products(
+                page_size=10
+            )
+
             return True
 
         except DeltaAPIError:
@@ -431,28 +500,39 @@ class DeltaPublicClient:
 
 
 # ================================================================
-# BACKWARD-COMPATIBILITY HELPERS
+# DEFAULT CLIENT
 # ================================================================
 
 _default_client = DeltaPublicClient()
 
 
+# ================================================================
+# BACKWARD-COMPATIBILITY FUNCTIONS
+# ================================================================
+
 def get_products(
     page_size: int = 100,
 ) -> list[dict[str, Any]]:
+
     return _default_client.get_products(
         page_size=page_size
     )
 
 
 def find_btc_perpetual() -> Optional[DeltaProduct]:
-    return _default_client.get_product("BTCUSD")
+
+    return _default_client.get_product(
+        "BTCUSD"
+    )
 
 
 def get_ticker(
     symbol: str,
 ) -> dict[str, Any]:
-    return _default_client.get_ticker(symbol)
+
+    return _default_client.get_ticker(
+        symbol
+    )
 
 
 def get_recent_candles(
@@ -461,7 +541,8 @@ def get_recent_candles(
     start: Optional[int] = None,
     end: Optional[int] = None,
 ) -> dict[str, Any]:
-    return _default_client.get_candles(
+
+    return _default_client.get_recent_candles(
         symbol=symbol,
         resolution=resolution,
         start=start,
@@ -470,4 +551,5 @@ def get_recent_candles(
 
 
 def test_public_connection() -> bool:
+
     return _default_client.test_public_connection()
