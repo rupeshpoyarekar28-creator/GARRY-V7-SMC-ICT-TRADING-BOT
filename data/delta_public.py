@@ -1,404 +1,473 @@
 """
 GARRY V7 SMC ICT TRADING BOT
 
-Delta Exchange India - Public Market Data Client
+Delta Exchange India - Public Market/Product Data Client.
 
-IMPORTANT:
-- Public market data only.
-- No API key.
-- No authentication.
-- No order placement.
-- No trading execution.
+STEP 3:
+- Exact 7 approved trading pairs
+- Live perpetual-futures validation
+- Dynamic contract specifications
+- No API key
+- No authentication
+- No order placement
 """
 
-from __future__ import annotations
-
 import json
-import time
-from typing import Any
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from typing import Any, Optional
 
 
-class DeltaPublicAPIError(Exception):
-    """Raised when Delta public API request fails."""
+BASE_URL = "https://api.india.delta.exchange"
+
+# ------------------------------------------------------------
+# LOCKED USER-APPROVED PAIRS
+# Do not add/remove symbols without explicit user approval.
+# ------------------------------------------------------------
+
+APPROVED_SYMBOLS = (
+    "BTCUSD",
+    "XAUTUSD",
+    "ETHUSD",
+    "PAXGUSD",
+    "SOLUSD",
+    "XRPUSD",
+    "UNIUSD",
+)
+
+
+@dataclass
+class DeltaProduct:
+    product_id: int
+    symbol: str
+    description: str
+
+    contract_type: str
+    state: str
+    trading_status: str
+
+    contract_value: float
+    contract_unit_currency: str
+    tick_size: float
+
+    position_size_limit: float
+    default_leverage: float
+
+    maker_commission_rate: float
+    taker_commission_rate: float
+
+    funding_method: str
+    annualized_funding: float
+
+    is_quanto: bool
+
+
+class DeltaAPIError(Exception):
+    """Raised when Delta public API communication fails."""
 
 
 class DeltaPublicClient:
     """
-    Small dependency-free client for Delta Exchange India public APIs.
+    Dependency-free Delta Exchange India public REST client.
 
-    Uses Python standard library only so the Android build chain
-    does not need additional third-party packages.
+    This client:
+    - reads public market/product data
+    - validates approved contracts
+    - never authenticates
+    - never places orders
     """
 
-    BASE_URL = "https://api.india.delta.exchange"
-
-    def __init__(self, timeout: int = 10):
+    def __init__(
+        self,
+        base_url: str = BASE_URL,
+        timeout: int = 10,
+    ):
+        self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    # ---------------------------------------------------------
-    # Internal HTTP GET
-    # ---------------------------------------------------------
+    # ============================================================
+    # HTTP
+    # ============================================================
 
     def _get(
         self,
         path: str,
-        params: dict[str, Any] | None = None,
+        params: Optional[dict[str, Any]] = None,
     ) -> Any:
-        url = self.BASE_URL + path
-
         if params:
-            clean_params = {
-                key: value
-                for key, value in params.items()
-                if value is not None
-            }
+            query = urllib.parse.urlencode(params)
+            url = f"{self.base_url}{path}?{query}"
+        else:
+            url = f"{self.base_url}{path}"
 
-            if clean_params:
-                url += "?" + urlencode(clean_params)
-
-        request = Request(
-            url,
+        request = urllib.request.Request(
+            url=url,
+            method="GET",
             headers={
                 "Accept": "application/json",
-                "User-Agent": "GARRY-V7-SMC-ICT-TRADING-BOT/1.0",
+                "User-Agent": "GARRY-V7/1.0",
             },
-            method="GET",
         )
 
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.timeout,
+            ) as response:
+
                 raw = response.read().decode("utf-8")
 
-        except HTTPError as exc:
-            raise DeltaPublicAPIError(
-                f"HTTP error {exc.code}: {exc.reason}"
+        except urllib.error.HTTPError as exc:
+            raise DeltaAPIError(
+                f"HTTP ERROR {exc.code}"
             ) from exc
 
-        except URLError as exc:
-            raise DeltaPublicAPIError(
-                f"Network error: {exc.reason}"
+        except urllib.error.URLError as exc:
+            raise DeltaAPIError(
+                f"NETWORK ERROR: {exc.reason}"
             ) from exc
 
         except TimeoutError as exc:
-            raise DeltaPublicAPIError(
-                "Network timeout"
-            ) from exc
-
-        except Exception as exc:
-            raise DeltaPublicAPIError(
-                f"Unexpected network error: {exc}"
+            raise DeltaAPIError(
+                "DELTA API TIMEOUT"
             ) from exc
 
         try:
-            data = json.loads(raw)
+            payload = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise DeltaPublicAPIError(
-                "Delta returned invalid JSON"
+            raise DeltaAPIError(
+                "INVALID JSON RESPONSE FROM DELTA"
             ) from exc
 
-        if not isinstance(data, dict):
-            raise DeltaPublicAPIError(
-                "Delta returned unexpected response format"
-            )
+        if isinstance(payload, dict):
+            if payload.get("success") is False:
+                raise DeltaAPIError(
+                    str(
+                        payload.get(
+                            "error",
+                            "DELTA API REQUEST FAILED",
+                        )
+                    )
+                )
 
-        if data.get("success") is False:
-            raise DeltaPublicAPIError(
-                str(data.get("error", "Delta API request failed"))
-            )
+        return payload
 
-        return data.get("result")
+    # ============================================================
+    # PRODUCTS
+    # ============================================================
 
-    # ---------------------------------------------------------
-    # Product List
-    # ---------------------------------------------------------
-
-    def get_products(self, page_size: int = 100) -> list[dict[str, Any]]:
+    def get_products(
+        self,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
         """
-        Get active/current product information.
-
-        This is used later to discover the correct Delta symbol
-        instead of blindly assuming BTCUSDT/BTCUSD.
+        Return live perpetual-futures products.
         """
 
-        result = self._get(
+        payload = self._get(
             "/v2/products",
-            {
+            params={
+                "contract_types": "perpetual_futures",
+                "states": "live",
                 "page_size": page_size,
             },
         )
 
+        result = payload.get("result", [])
+
         if not isinstance(result, list):
-            raise DeltaPublicAPIError(
-                "Unexpected products response"
+            raise DeltaAPIError(
+                "INVALID PRODUCTS RESPONSE"
             )
 
         return result
 
-    # ---------------------------------------------------------
-    # Find BTC perpetual product
-    # ---------------------------------------------------------
-
-    def find_btc_perpetual(self) -> dict[str, Any] | None:
+    def get_product(
+        self,
+        symbol: str,
+    ) -> Optional[DeltaProduct]:
         """
-        Find an active BTC perpetual product.
+        Fetch and validate one product by symbol.
 
-        We intentionally do NOT hard-code BTCUSDT or BTCUSD.
-        Delta's actual product metadata decides the symbol.
+        The product must be:
+        - approved
+        - perpetual_futures
+        - live
+        - operational
+        """
+
+        symbol = str(symbol).upper().strip()
+
+        if symbol not in APPROVED_SYMBOLS:
+            return None
+
+        try:
+            payload = self._get(
+                f"/v2/products/{urllib.parse.quote(symbol)}"
+            )
+        except DeltaAPIError:
+            return None
+
+        raw = payload.get("result")
+
+        if not isinstance(raw, dict):
+            return None
+
+        if raw.get("symbol") != symbol:
+            return None
+
+        if raw.get("contract_type") != "perpetual_futures":
+            return None
+
+        if raw.get("state") != "live":
+            return None
+
+        if raw.get("trading_status") != "operational":
+            return None
+
+        return self._parse_product(raw)
+
+    def get_approved_products(
+        self,
+    ) -> dict[str, DeltaProduct]:
+        """
+        Validate all 7 locked symbols.
+
+        Only valid/live/operational perpetual contracts
+        are returned.
         """
 
         products = self.get_products()
 
-        candidates = []
+        product_map: dict[str, DeltaProduct] = {}
 
-        for product in products:
-            if not isinstance(product, dict):
+        for raw in products:
+
+            if not isinstance(raw, dict):
                 continue
 
-            symbol = str(product.get("symbol", ""))
-            contract_type = str(
-                product.get("contract_type", "")
-            ).lower()
-
-            state = str(
-                product.get("state", "")
-            ).lower()
-
-            underlying = str(
-                product.get("underlying_asset_symbol", "")
+            symbol = str(
+                raw.get("symbol", "")
             ).upper()
 
-            symbol_upper = symbol.upper()
+            if symbol not in APPROVED_SYMBOLS:
+                continue
 
-            is_btc = (
-                "BTC" in symbol_upper
-                or underlying == "BTC"
+            if raw.get("contract_type") != "perpetual_futures":
+                continue
+
+            if raw.get("state") != "live":
+                continue
+
+            if raw.get("trading_status") != "operational":
+                continue
+
+            product = self._parse_product(raw)
+
+            if product is not None:
+                product_map[symbol] = product
+
+        return product_map
+
+    # ============================================================
+    # PRODUCT PARSER
+    # ============================================================
+
+    def _parse_product(
+        self,
+        raw: dict[str, Any],
+    ) -> Optional[DeltaProduct]:
+
+        try:
+            return DeltaProduct(
+                product_id=int(raw["id"]),
+                symbol=str(raw["symbol"]),
+                description=str(
+                    raw.get("description", "")
+                ),
+                contract_type=str(
+                    raw["contract_type"]
+                ),
+                state=str(
+                    raw["state"]
+                ),
+                trading_status=str(
+                    raw["trading_status"]
+                ),
+                contract_value=float(
+                    raw["contract_value"]
+                ),
+                contract_unit_currency=str(
+                    raw.get(
+                        "contract_unit_currency",
+                        "",
+                    )
+                ),
+                tick_size=float(
+                    raw["tick_size"]
+                ),
+                position_size_limit=float(
+                    raw.get(
+                        "position_size_limit",
+                        0,
+                    )
+                ),
+                default_leverage=float(
+                    raw.get(
+                        "default_leverage",
+                        0,
+                    )
+                ),
+                maker_commission_rate=float(
+                    raw.get(
+                        "maker_commission_rate",
+                        0,
+                    )
+                ),
+                taker_commission_rate=float(
+                    raw.get(
+                        "taker_commission_rate",
+                        0,
+                    )
+                ),
+                funding_method=str(
+                    raw.get(
+                        "funding_method",
+                        "",
+                    )
+                ),
+                annualized_funding=float(
+                    raw.get(
+                        "annualized_funding",
+                        0,
+                    )
+                ),
+                is_quanto=bool(
+                    raw.get(
+                        "is_quanto",
+                        False,
+                    )
+                ),
             )
 
-            is_perpetual = (
-                "perpetual" in contract_type
-                or contract_type == "perpetual_futures"
-            )
-
-            is_active = (
-                not state
-                or state in {
-                    "live",
-                    "online",
-                    "active",
-                }
-            )
-
-            if is_btc and is_perpetual and is_active:
-                candidates.append(product)
-
-        if not candidates:
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
             return None
 
-        # Prefer a product whose symbol contains BTCUSD/BTCUSDT.
-        candidates.sort(
-            key=lambda item: (
-                0
-                if "BTCUSD" in str(
-                    item.get("symbol", "")
-                ).upper()
-                else 1
-            )
-        )
-
-        return candidates[0]
-
-    # ---------------------------------------------------------
-    # Ticker
-    # ---------------------------------------------------------
+    # ============================================================
+    # TICKER
+    # ============================================================
 
     def get_ticker(
         self,
         symbol: str,
     ) -> dict[str, Any]:
-        """
-        Get live ticker for one product.
-        """
 
-        result = self._get(
-            f"/v2/tickers/{symbol}"
-        )
+        symbol = str(symbol).upper().strip()
 
-        if not isinstance(result, dict):
-            raise DeltaPublicAPIError(
-                "Unexpected ticker response"
+        if symbol not in APPROVED_SYMBOLS:
+            raise DeltaAPIError(
+                "SYMBOL NOT APPROVED"
             )
 
-        return result
+        return self._get(
+            f"/v2/tickers/{urllib.parse.quote(symbol)}"
+        )
 
-    # ---------------------------------------------------------
-    # Historical candles
-    # ---------------------------------------------------------
+    # ============================================================
+    # CANDLES
+    # ============================================================
 
     def get_candles(
         self,
         symbol: str,
-        resolution: str,
-        start: int,
-        end: int,
-    ) -> list[dict[str, Any]]:
-        """
-        Get historical OHLCV candles.
-
-        Example resolutions:
-        5m
-        15m
-        1h
-
-        Delta allows up to 2000 candles per response.
-        """
-
-        allowed_resolutions = {
-            "1m",
-            "3m",
-            "5m",
-            "15m",
-            "30m",
-            "1h",
-            "2h",
-            "4h",
-            "6h",
-            "1d",
-            "1w",
-        }
-
-        if resolution not in allowed_resolutions:
-            raise ValueError(
-                f"Unsupported resolution: {resolution}"
-            )
-
-        if start >= end:
-            raise ValueError(
-                "start must be less than end"
-            )
-
-        result = self._get(
-            "/v2/history/candles",
-            {
-                "resolution": resolution,
-                "symbol": symbol,
-                "start": int(start),
-                "end": int(end),
-            },
-        )
-
-        if not isinstance(result, list):
-            raise DeltaPublicAPIError(
-                "Unexpected candles response"
-            )
-
-        return result
-
-    # ---------------------------------------------------------
-    # Recent candles helper
-    # ---------------------------------------------------------
-
-    def get_recent_candles(
-        self,
-        symbol: str,
         resolution: str = "5m",
-        count: int = 100,
-    ) -> list[dict[str, Any]]:
-        """
-        Fetch recent candles.
+        start: Optional[int] = None,
+        end: Optional[int] = None,
+    ) -> dict[str, Any]:
 
-        count is capped to Delta's documented 2000 candle
-        maximum per response.
-        """
+        symbol = str(symbol).upper().strip()
 
-        count = max(1, min(int(count), 2000))
+        if symbol not in APPROVED_SYMBOLS:
+            raise DeltaAPIError(
+                "SYMBOL NOT APPROVED"
+            )
 
-        resolution_seconds = {
-            "1m": 60,
-            "3m": 180,
-            "5m": 300,
-            "15m": 900,
-            "30m": 1800,
-            "1h": 3600,
-            "2h": 7200,
-            "4h": 14400,
-            "6h": 21600,
-            "1d": 86400,
-            "1w": 604800,
+        params: dict[str, Any] = {
+            "resolution": resolution,
         }
 
-        seconds = resolution_seconds.get(resolution)
+        if start is not None:
+            params["start"] = start
 
-        if seconds is None:
-            raise ValueError(
-                f"Unsupported resolution: {resolution}"
-            )
+        if end is not None:
+            params["end"] = end
 
-        end = int(time.time())
-        start = end - (seconds * count)
-
-        return self.get_candles(
-            symbol=symbol,
-            resolution=resolution,
-            start=start,
-            end=end,
+        return self._get(
+            "/v2/history/candles",
+            params=params,
         )
 
+    # ============================================================
+    # CONNECTION TEST
+    # ============================================================
 
-# -------------------------------------------------------------
-# Simple manual test
-# -------------------------------------------------------------
+    def test_public_connection(self) -> bool:
+        """
+        Confirm Delta public API is reachable.
+        """
 
-def test_public_connection() -> dict[str, Any]:
-    """
-    Basic diagnostic test.
+        try:
+            self.get_products(page_size=10)
+            return True
 
-    This function does NOT place orders.
-    """
-
-    client = DeltaPublicClient(timeout=10)
-
-    product = client.find_btc_perpetual()
-
-    if not product:
-        return {
-            "success": False,
-            "error": "BTC perpetual product not found",
-        }
-
-    symbol = str(product.get("symbol"))
-
-    ticker = client.get_ticker(symbol)
-
-    return {
-        "success": True,
-        "symbol": symbol,
-        "product": product,
-        "ticker": ticker,
-    }
+        except DeltaAPIError:
+            return False
 
 
-if __name__ == "__main__":
-    try:
-        result = test_public_connection()
+# ================================================================
+# BACKWARD-COMPATIBILITY HELPERS
+# ================================================================
 
-        print(
-            json.dumps(
-                result,
-                indent=2,
-                default=str,
-            )
-        )
+_default_client = DeltaPublicClient()
 
-    except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": str(exc),
-                },
-                indent=2,
-            )
-        )
+
+def get_products(
+    page_size: int = 100,
+) -> list[dict[str, Any]]:
+    return _default_client.get_products(
+        page_size=page_size
+    )
+
+
+def find_btc_perpetual() -> Optional[DeltaProduct]:
+    return _default_client.get_product("BTCUSD")
+
+
+def get_ticker(
+    symbol: str,
+) -> dict[str, Any]:
+    return _default_client.get_ticker(symbol)
+
+
+def get_recent_candles(
+    symbol: str,
+    resolution: str = "5m",
+    start: Optional[int] = None,
+    end: Optional[int] = None,
+) -> dict[str, Any]:
+    return _default_client.get_candles(
+        symbol=symbol,
+        resolution=resolution,
+        start=start,
+        end=end,
+    )
+
+
+def test_public_connection() -> bool:
+    return _default_client.test_public_connection()
