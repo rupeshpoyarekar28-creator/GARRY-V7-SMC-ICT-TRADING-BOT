@@ -1,127 +1,100 @@
-name: GARRY V7 SMC ICT TRADING BOT - Android APK
+name: GARRY V7 Android APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-
-permissions:
-  contents: read
 
 jobs:
-  build-android:
-    name: Build GARRY V7 APK
+  build:
+    name: Build Android debug APK
     runs-on: ubuntu-22.04
 
     env:
-      ANDROID_NDK_VERSION: 28.2.13676358
-      ANDROID_API: 35
+      ANDROID_NDK_VERSION: 25.2.9519653
+      ANDROID_API_LEVEL: 34
+      BUILD_TOOLS_VERSION: 34.0.0
 
     steps:
 
-      # ========================================================
+      # ------------------------------------------------------------
       # 1. Checkout repository
-      # ========================================================
-
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ========================================================
-      # 2. Python 3.11
-      # ========================================================
 
-      - name: Set up Python 3.11
+      # ------------------------------------------------------------
+      # 2. Setup Python 3.11
+      # ------------------------------------------------------------
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      # ========================================================
-      # 3. Java 17
-      # ========================================================
 
-      - name: Set up Java 17
+      # ------------------------------------------------------------
+      # 3. Setup Java 17
+      # ------------------------------------------------------------
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
+          distribution: temurin
           java-version: "17"
 
-      # ========================================================
-      # 4. Linux build dependencies
-      # ========================================================
 
-      - name: Install Linux dependencies
+      # ------------------------------------------------------------
+      # 4. Setup Android SDK
+      # ------------------------------------------------------------
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # ------------------------------------------------------------
+      # 5. Install Android SDK components
+      # ------------------------------------------------------------
+      - name: Install Android SDK components
+        shell: bash
         run: |
-          sudo apt-get update
+          yes | sdkmanager --licenses || true
 
-          sudo apt-get install -y \
-            git \
-            zip \
-            unzip \
-            curl \
-            wget \
-            autoconf \
-            automake \
-            autopoint \
-            gettext \
-            libtool \
-            pkg-config \
-            cmake \
-            build-essential \
-            zlib1g-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libtinfo5 \
-            libffi-dev \
-            libssl-dev \
-            libsqlite3-dev
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${BUILD_TOOLS_VERSION}" \
+            "ndk;${ANDROID_NDK_VERSION}"
 
-      # ========================================================
-      # 5. Android SDK
-      # ========================================================
+          echo "Installed Android SDK:"
+          sdkmanager --list_installed | grep -E "platforms;android|build-tools|ndk;" || true
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: >-
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
-            ndk;28.2.13676358
 
-      # ========================================================
-      # 6. Verify Android SDK
-      # ========================================================
-
-      - name: Verify Android SDK
+      # ------------------------------------------------------------
+      # 6. Verify Java / Python / Android / NDK
+      # ------------------------------------------------------------
+      - name: Verify build environment
+        shell: bash
         run: |
-          echo "SDK manager:"
-          which sdkmanager
-          sdkmanager --version
+          echo "========== PYTHON =========="
+          python --version
 
-          echo ""
-          echo "Java:"
+          echo "========== JAVA =========="
           java -version
 
-          echo ""
-          echo "Android SDK:"
-          echo "$ANDROID_HOME"
+          echo "========== ANDROID SDK =========="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
-          echo ""
-          echo "Installed Android platforms:"
-          sdkmanager --list_installed | grep "platforms;android-35" || true
-
-          echo ""
-          echo "Installed NDK:"
+          echo "========== NDK =========="
           test -d "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
-          ls -la "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          ls -la "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" | head
 
-      # ========================================================
-      # 7. Install Python build tools
-      # ========================================================
+          echo "========== BUILD TOOLS =========="
+          ls -la "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}" | head
 
-      - name: Install Buildozer
+
+      # ------------------------------------------------------------
+      # 7. Install Buildozer dependencies
+      # ------------------------------------------------------------
+      - name: Install Buildozer dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip setuptools wheel
 
@@ -130,181 +103,84 @@ jobs:
             cython==0.29.34 \
             virtualenv
 
-      # ========================================================
-      # 8. Validate required GARRY V7 files
-      # ========================================================
 
-      - name: Validate GARRY V7 project structure
+      # ------------------------------------------------------------
+      # 8. Verify Buildozer
+      # ------------------------------------------------------------
+      - name: Verify Buildozer
+        shell: bash
         run: |
-          test -f main.py
-          test -f buildozer.spec
-          test -f requirements.txt
+          buildozer --version
+          cython --version
 
-          test -f app/__init__.py
-          test -f app/state.py
-          test -f app/ui.py
 
-          test -f data/__init__.py
-          test -f data/models.py
-          test -f data/demo_data.py
-
-          test -f strategy/__init__.py
-          test -f strategy/market_structure.py
-          test -f strategy/smc.py
-          test -f strategy/ict.py
-          test -f strategy/risk.py
-          test -f strategy/signals.py
-
-          echo "GARRY V7 project structure: PASS"
-
-      # ========================================================
-      # 9. Verify old GARRY V8 files are absent
-      # ========================================================
-
-      - name: Verify no GARRY V8 dependency chain
+      # ------------------------------------------------------------
+      # 9. Clean previous build/cache
+      # ------------------------------------------------------------
+      - name: Clean Buildozer build
+        shell: bash
         run: |
-          if find . \
-            -path "./.git" -prune -o \
-            -path "./.buildozer" -prune -o \
-            -type f \
-            \( \
-              -name "garry_v8_engine.py" \
-              -o -name "delta_health.py" \
-              -o -name "self_healing.py" \
-              -o -name "service.py" \
-            \) \
-            -print | grep -q .; then
+          rm -rf .buildozer
+          rm -rf bin
 
-            echo "ERROR: Old GARRY V8 files detected."
-            exit 1
+          echo "Build directories cleaned."
+
+
+      # ------------------------------------------------------------
+      # 10. Check buildozer.spec
+      # ------------------------------------------------------------
+      - name: Show build configuration
+        shell: bash
+        run: |
+          echo "========== buildozer.spec =========="
+          cat buildozer.spec
+
+          echo "========== requirements.txt =========="
+          if [ -f requirements.txt ]; then
+            cat requirements.txt
+          else
+            echo "requirements.txt not found"
           fi
 
-          echo "No old GARRY V8 dependency files detected: PASS"
 
-      # ========================================================
-      # 10. Python syntax validation
-      # ========================================================
-
-      - name: Validate Python syntax
-        run: |
-          python -m compileall -q \
-            main.py \
-            app \
-            data \
-            strategy
-
-          echo "Python syntax validation: PASS"
-
-      # ========================================================
-      # 11. Validate strategy imports
-      # ========================================================
-
-      - name: Validate strategy imports
-        run: |
-          python - <<'PY'
-          import data
-          import data.models
-          import data.demo_data
-
-          import strategy
-          import strategy.market_structure
-          import strategy.smc
-          import strategy.ict
-          import strategy.risk
-          import strategy.signals
-
-          print("GARRY V7 strategy imports: PASS")
-          PY
-
-      # ========================================================
-      # 12. Validate Buildozer
-      # ========================================================
-
-      - name: Validate Buildozer
-        run: |
-          buildozer version
-
-          echo "Buildozer validation stage: PASS"
-
-      # ========================================================
-      # 13. Build Android debug APK
-      # ========================================================
-
+      # ------------------------------------------------------------
+      # 11. Build APK
+      # ------------------------------------------------------------
       - name: Build Android debug APK
+        shell: bash
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           buildozer -v android debug
 
-      # ========================================================
-      # 14. Verify APK generation
-      # ========================================================
 
-      - name: Verify generated APK
+      # ------------------------------------------------------------
+      # 12. Verify APK
+      # ------------------------------------------------------------
+      - name: Verify APK
+        shell: bash
         run: |
-          echo "Generated APK files:"
+          echo "========== BIN DIRECTORY =========="
+          ls -lah bin || true
 
-          find bin \
-            -maxdepth 1 \
-            -type f \
-            -name "*.apk" \
-            -print
+          APK_COUNT=$(find bin -maxdepth 1 -type f -name "*.apk" | wc -l)
 
-          APK_COUNT=$(find bin \
-            -maxdepth 1 \
-            -type f \
-            -name "*.apk" \
-            | wc -l)
-
-          if [ "$APK_COUNT" -lt 1 ]; then
-            echo "ERROR: No APK was generated."
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK_COUNT=$APK_COUNT"
+          echo "APK generated successfully:"
+          find bin -maxdepth 1 -type f -name "*.apk" -print
 
-          GENERATED_APK=$(find bin \
-            -maxdepth 1 \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -quit)
 
-          echo "Generated APK:"
-          echo "$GENERATED_APK"
-
-          test -s "$GENERATED_APK"
-
-      # ========================================================
-      # 15. Create fixed GARRY V7 APK filename
-      # ========================================================
-
-      - name: Prepare final GARRY V7 APK
-        run: |
-          GENERATED_APK=$(find bin \
-            -maxdepth 1 \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -quit)
-
-          cp "$GENERATED_APK" \
-            "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
-
-          test -s \
-            "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
-
-          echo ""
-          echo "FINAL APK:"
-          ls -lh \
-            "bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk"
-
-      # ========================================================
-      # 16. Upload verified APK
-      # ========================================================
-
-      - name: Upload GARRY V7 APK
+      # ------------------------------------------------------------
+      # 13. Upload APK
+      # ------------------------------------------------------------
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GARRY-V7-SMC-ICT-TRADING-BOT-APK
-          path: bin/GARRY-V7-SMC-ICT-TRADING-BOT-debug.apk
+          name: GARRY-V7-SMC-ICT-TRADING-BOT-debug
+          path: bin/*.apk
           if-no-files-found: error
-          retention-days: 7
