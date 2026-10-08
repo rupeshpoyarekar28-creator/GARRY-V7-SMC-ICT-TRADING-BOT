@@ -1,482 +1,315 @@
 """
 GARRY V7 SMC ICT TRADING BOT
 
-Delta Exchange India - Market Feed
+STEP 4 - Delta Live Market Feed
 
-STEP 3:
-- Discovers BTC perpetual symbol
-- Fetches live ticker data
-- Parses Delta ticker bid/ask correctly
-- Provides recent OHLC candles
+Purpose:
+- Delta Exchange India public market data
+- Locked 7 trading pairs
+- REST ticker fallback
+- Thread-safe snapshots
+- Stale-data detection
+- Reconnect-friendly architecture
+
+IMPORTANT:
 - No API key
-- No authentication
+- No private authentication
 - No order placement
 - No real trading
+- WebSocket dependency is optional
+- REST remains available as fallback
+
+Primary future architecture:
+    Delta WebSocket
+          |
+          v
+    MarketFeed Engine
+          |
+          +--> 7 pair snapshots
+          |
+          +--> SMC/ICT
+          |
+          +--> Risk Engine
+
+For the current stable Android build, the module must remain
+dependency-light. If websocket-client is not packaged yet,
+REST fallback remains functional.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from data.delta_public import (
-    DeltaPublicAPIError,
+    APPROVED_SYMBOLS,
+    DeltaAPIError,
     DeltaPublicClient,
 )
 
 
-@dataclass(frozen=True)
-class MarketSnapshot:
-    """Current market information."""
+DELTA_PUBLIC_WS_URL = (
+    "wss://public-socket.india.delta.exchange"
+)
 
+DEFAULT_REST_INTERVAL = 5.0
+DEFAULT_STALE_AFTER = 15.0
+
+
+# ================================================================
+# MARKET SNAPSHOT
+# ================================================================
+
+@dataclass
+class MarketSnapshot:
     symbol: str
-    price: float
-    bid: float
-    ask: float
-    volume: float
-    timestamp: float
-    status: str
+
+    price: float = 0.0
+    bid: float = 0.0
+    ask: float = 0.0
+    volume: float = 0.0
+
+    timestamp: float = 0.0
+
+    status: str = "WAITING"
+    source: str = "NONE"
+
     error: str = ""
 
+    @property
+    def is_stale(
+        self,
+        stale_after: float = DEFAULT_STALE_AFTER,
+    ) -> bool:
+
+        if self.timestamp <= 0:
+            return True
+
+        return (
+            time.time() - self.timestamp
+        ) > stale_after
+
+
+# ================================================================
+# MARKET FEED
+# ================================================================
 
 class DeltaMarketFeed:
     """
-    Safe public-data market feed.
+    Public Delta market-data engine.
 
-    This class only reads public market data.
-    It cannot place orders.
+    Current stable mode:
+        REST polling
+
+    Architecture prepared for:
+        WebSocket primary
+        REST fallback
     """
 
     def __init__(
         self,
-        symbol: Optional[str] = None,
-        poll_interval: float = 5.0,
-        timeout: int = 10,
+        symbols: Optional[tuple[str, ...]] = None,
+        rest_interval: float = DEFAULT_REST_INTERVAL,
+        stale_after: float = DEFAULT_STALE_AFTER,
     ):
-        self.client = DeltaPublicClient(timeout=timeout)
 
-        self.symbol = symbol
+        requested_symbols = (
+            symbols
+            if symbols is not None
+            else APPROVED_SYMBOLS
+        )
 
-        self.poll_interval = max(
+        # --------------------------------------------------------
+        # Security: never allow symbols outside approved list.
+        # --------------------------------------------------------
+
+        self.symbols = tuple(
+            symbol.upper().strip()
+            for symbol in requested_symbols
+            if symbol.upper().strip()
+            in APPROVED_SYMBOLS
+        )
+
+        self.rest_interval = max(
             2.0,
-            float(poll_interval),
+            float(rest_interval),
         )
 
-        self._running = False
-
-        self._thread: Optional[threading.Thread] = None
-
-        self._lock = threading.Lock()
-
-        self._snapshot = MarketSnapshot(
-            symbol=symbol or "",
-            price=0.0,
-            bid=0.0,
-            ask=0.0,
-            volume=0.0,
-            timestamp=0.0,
-            status="DISCONNECTED",
-            error="",
+        self.stale_after = max(
+            5.0,
+            float(stale_after),
         )
+
+        self.client = DeltaPublicClient()
+
+        self._snapshots: dict[str, MarketSnapshot] = {
+            symbol: MarketSnapshot(
+                symbol=symbol
+            )
+            for symbol in self.symbols
+        }
 
         self._callbacks: list[
             Callable[[MarketSnapshot], None]
         ] = []
 
-    # ---------------------------------------------------------
+        self._lock = threading.RLock()
+
+        self._running = False
+        self._thread: Optional[
+            threading.Thread
+        ] = None
+
+        self._last_error = ""
+        self._connection_status = "DISCONNECTED"
+
+        self._ws_available = False
+
+        self._stop_event = threading.Event()
+
+    # ============================================================
     # CALLBACKS
-    # ---------------------------------------------------------
+    # ============================================================
 
     def add_callback(
         self,
-        callback: Callable[[MarketSnapshot], None],
+        callback: Callable[
+            [MarketSnapshot],
+            None,
+        ],
     ) -> None:
-        """Register a callback for new market snapshots."""
 
-        if not callable(callback):
-            raise TypeError(
-                "callback must be callable"
-            )
-
-        with self._lock:
-
-            if callback not in self._callbacks:
-                self._callbacks.append(callback)
+        if callback not in self._callbacks:
+            self._callbacks.append(callback)
 
     def remove_callback(
         self,
-        callback: Callable[[MarketSnapshot], None],
-    ) -> None:
-        """Remove a previously registered callback."""
-
-        with self._lock:
-
-            if callback in self._callbacks:
-                self._callbacks.remove(callback)
-
-    def _notify_callbacks(
-        self,
-        snapshot: MarketSnapshot,
-    ) -> None:
-        """Notify registered callbacks safely."""
-
-        with self._lock:
-            callbacks = list(self._callbacks)
-
-        for callback in callbacks:
-
-            try:
-                callback(snapshot)
-
-            except Exception:
-                # A callback failure must not stop
-                # the market-data feed.
-                continue
-
-    # ---------------------------------------------------------
-    # SNAPSHOT
-    # ---------------------------------------------------------
-
-    def get_snapshot(self) -> MarketSnapshot:
-        """Return the latest market snapshot."""
-
-        with self._lock:
-            return self._snapshot
-
-    def _set_snapshot(
-        self,
-        snapshot: MarketSnapshot,
+        callback: Callable[
+            [MarketSnapshot],
+            None,
+        ],
     ) -> None:
 
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+
+    # ============================================================
+    # SNAPSHOT ACCESS
+    # ============================================================
+
+    def get_snapshot(
+        self,
+        symbol: str,
+    ) -> Optional[MarketSnapshot]:
+
+        symbol = symbol.upper().strip()
+
         with self._lock:
-            self._snapshot = snapshot
 
-    # ---------------------------------------------------------
-    # SYMBOL DISCOVERY
-    # ---------------------------------------------------------
-
-    def discover_symbol(self) -> str:
-        """
-        Discover an active BTC perpetual product.
-
-        The symbol is obtained from Delta product metadata.
-        """
-
-        product = self.client.find_btc_perpetual()
-
-        if not product:
-
-            raise DeltaPublicAPIError(
-                "No active BTC perpetual product found"
+            snapshot = self._snapshots.get(
+                symbol
             )
 
-        symbol = str(
-            product.get("symbol", "")
-        ).strip()
+            if snapshot is None:
+                return None
 
-        if not symbol:
-
-            raise DeltaPublicAPIError(
-                "Delta returned BTC product without symbol"
+            return MarketSnapshot(
+                symbol=snapshot.symbol,
+                price=snapshot.price,
+                bid=snapshot.bid,
+                ask=snapshot.ask,
+                volume=snapshot.volume,
+                timestamp=snapshot.timestamp,
+                status=snapshot.status,
+                source=snapshot.source,
+                error=snapshot.error,
             )
 
-        self.symbol = symbol
-
-        return symbol
-
-    # ---------------------------------------------------------
-    # NUMBER CONVERSION
-    # ---------------------------------------------------------
-
-    @staticmethod
-    def _number(
-        value,
-        default: float = 0.0,
-    ) -> float:
-        """Safely convert API value to float."""
-
-        try:
-
-            if value is None:
-                return default
-
-            return float(value)
-
-        except (
-            TypeError,
-            ValueError,
-        ):
-
-            return default
-
-    # ---------------------------------------------------------
-    # TICKER PARSING
-    # ---------------------------------------------------------
-
-    def _parse_ticker(
+    def get_all_snapshots(
         self,
-        ticker: dict,
-    ) -> MarketSnapshot:
-        """
-        Convert Delta ticker response to MarketSnapshot.
+    ) -> dict[str, MarketSnapshot]:
 
-        Delta current ticker response provides:
+        with self._lock:
 
-            close
-            volume
-            quotes.best_bid
-            quotes.best_ask
-        """
-
-        # -----------------------------------------------------
-        # SYMBOL
-        # -----------------------------------------------------
-
-        symbol = str(
-            ticker.get("symbol")
-            or self.symbol
-            or ""
-        )
-
-        # -----------------------------------------------------
-        # LAST TRADED PRICE
-        # -----------------------------------------------------
-
-        price = self._number(
-            ticker.get("close")
-            or ticker.get("last_price")
-            or ticker.get("price")
-        )
-
-        # -----------------------------------------------------
-        # BID / ASK
-        # -----------------------------------------------------
-        #
-        # Delta returns these values inside:
-        #
-        # "quotes": {
-        #     "best_bid": "...",
-        #     "best_ask": "..."
-        # }
-        #
-        # We also keep fallback handling for older/alternate
-        # response formats.
-        # -----------------------------------------------------
-
-        quotes = ticker.get("quotes")
-
-        if not isinstance(
-            quotes,
-            dict,
-        ):
-            quotes = {}
-
-        bid = self._number(
-            quotes.get("best_bid")
-            or ticker.get("best_bid")
-            or ticker.get("bid")
-        )
-
-        ask = self._number(
-            quotes.get("best_ask")
-            or ticker.get("best_ask")
-            or ticker.get("ask")
-        )
-
-        # -----------------------------------------------------
-        # VOLUME
-        # -----------------------------------------------------
-
-        volume = self._number(
-            ticker.get("volume")
-        )
-
-        # -----------------------------------------------------
-        # SNAPSHOT
-        # -----------------------------------------------------
-
-        return MarketSnapshot(
-            symbol=symbol,
-            price=price,
-            bid=bid,
-            ask=ask,
-            volume=volume,
-            timestamp=time.time(),
-            status="CONNECTED",
-            error="",
-        )
-
-    # ---------------------------------------------------------
-    # SINGLE MARKET UPDATE
-    # ---------------------------------------------------------
-
-    def update_once(
-        self,
-    ) -> MarketSnapshot:
-        """
-        Perform one public market-data update.
-
-        IMPORTANT:
-        No trading or order operation is performed.
-        """
-
-        try:
-
-            # -------------------------------------------------
-            # Discover symbol if not already known.
-            # -------------------------------------------------
-
-            if not self.symbol:
-
-                self.discover_symbol()
-
-            # -------------------------------------------------
-            # Fetch ticker.
-            # -------------------------------------------------
-
-            ticker = self.client.get_ticker(
-                self.symbol
-            )
-
-            # -------------------------------------------------
-            # Parse ticker.
-            # -------------------------------------------------
-
-            snapshot = self._parse_ticker(
-                ticker
-            )
-
-            # -------------------------------------------------
-            # Validate price.
-            # -------------------------------------------------
-
-            if snapshot.price <= 0:
-
-                raise DeltaPublicAPIError(
-                    "Delta returned invalid market price"
+            return {
+                symbol: MarketSnapshot(
+                    symbol=snapshot.symbol,
+                    price=snapshot.price,
+                    bid=snapshot.bid,
+                    ask=snapshot.ask,
+                    volume=snapshot.volume,
+                    timestamp=snapshot.timestamp,
+                    status=snapshot.status,
+                    source=snapshot.source,
+                    error=snapshot.error,
                 )
+                for symbol, snapshot
+                in self._snapshots.items()
+            }
 
-            # -------------------------------------------------
-            # Save snapshot.
-            # -------------------------------------------------
+    # ============================================================
+    # CONNECTION STATUS
+    # ============================================================
 
-            self._set_snapshot(
-                snapshot
-            )
+    @property
+    def connection_status(self) -> str:
 
-            # -------------------------------------------------
-            # Notify listeners.
-            # -------------------------------------------------
+        with self._lock:
+            return self._connection_status
 
-            self._notify_callbacks(
-                snapshot
-            )
+    @property
+    def last_error(self) -> str:
 
-            return snapshot
+        with self._lock:
+            return self._last_error
 
-        except Exception as exc:
+    def _set_connection_status(
+        self,
+        status: str,
+        error: str = "",
+    ) -> None:
 
-            error_message = str(exc)
+        with self._lock:
+            self._connection_status = status
+            self._last_error = error
 
-            snapshot = MarketSnapshot(
-                symbol=self.symbol or "",
-                price=0.0,
-                bid=0.0,
-                ask=0.0,
-                volume=0.0,
-                timestamp=time.time(),
-                status="ERROR",
-                error=error_message,
-            )
+    # ============================================================
+    # START / STOP
+    # ============================================================
 
-            self._set_snapshot(
-                snapshot
-            )
-
-            self._notify_callbacks(
-                snapshot
-            )
-
-            return snapshot
-
-    # ---------------------------------------------------------
-    # BACKGROUND LOOP
-    # ---------------------------------------------------------
-
-    def _run_loop(self) -> None:
-        """Run public market-data polling in background."""
-
-        while self._running:
-
-            started = time.monotonic()
-
-            self.update_once()
-
-            elapsed = (
-                time.monotonic()
-                - started
-            )
-
-            wait_time = max(
-                0.0,
-                self.poll_interval - elapsed,
-            )
-
-            if wait_time > 0:
-
-                time.sleep(
-                    wait_time
-                )
-
-    # ---------------------------------------------------------
-    # START
-    # ---------------------------------------------------------
-
-    def start(self) -> bool:
-        """
-        Start background market-data polling.
-
-        Returns:
-
-            True  = started
-            False = already running
-        """
+    def start(self) -> None:
 
         if self._running:
-            return False
+            return
 
         self._running = True
+        self._stop_event.clear()
+
+        self._set_connection_status(
+            "CONNECTING"
+        )
 
         self._thread = threading.Thread(
             target=self._run_loop,
-            name="garry-delta-market-feed",
+            name="GARRY-V7-MarketFeed",
             daemon=True,
         )
 
         self._thread.start()
 
-        return True
-
-    # ---------------------------------------------------------
-    # STOP
-    # ---------------------------------------------------------
-
-    def stop(self) -> bool:
-        """
-        Stop background market-data polling.
-
-        Returns:
-
-            True  = stopped
-            False = already stopped
-        """
-
-        if not self._running:
-            return False
+    def stop(self) -> None:
 
         self._running = False
+        self._stop_event.set()
+
+        self._set_connection_status(
+            "DISCONNECTED"
+        )
 
         thread = self._thread
 
@@ -487,108 +320,335 @@ class DeltaMarketFeed:
         ):
 
             thread.join(
-                timeout=2.0
+                timeout=3.0
             )
 
         self._thread = None
 
-        return True
+    # ============================================================
+    # MAIN LOOP
+    # ============================================================
 
-    # ---------------------------------------------------------
-    # RUNNING STATUS
-    # ---------------------------------------------------------
+    def _run_loop(self) -> None:
 
-    @property
-    def is_running(self) -> bool:
-        """Return True when background polling is active."""
+        while (
+            self._running
+            and not self._stop_event.is_set()
+        ):
 
-        return self._running
+            try:
 
-    # ---------------------------------------------------------
-    # RECENT CANDLES
-    # ---------------------------------------------------------
+                self._set_connection_status(
+                    "REST_FALLBACK"
+                )
 
-    def get_recent_candles(
+                self._poll_all_symbols()
+
+            except Exception as exc:
+
+                self._set_connection_status(
+                    "ERROR",
+                    str(exc),
+                )
+
+            self._stop_event.wait(
+                self.rest_interval
+            )
+
+    # ============================================================
+    # REST POLLING
+    # ============================================================
+
+    def _poll_all_symbols(self) -> None:
+
+        successful_updates = 0
+
+        for symbol in self.symbols:
+
+            if (
+                not self._running
+                or self._stop_event.is_set()
+            ):
+                break
+
+            try:
+
+                ticker = self.client.get_ticker(
+                    symbol
+                )
+
+                snapshot = self._parse_ticker(
+                    symbol,
+                    ticker,
+                )
+
+                self._update_snapshot(
+                    snapshot
+                )
+
+                successful_updates += 1
+
+            except (
+                DeltaAPIError,
+                urllib.error.URLError,
+                TimeoutError,
+                ValueError,
+                TypeError,
+            ) as exc:
+
+                self._mark_error(
+                    symbol,
+                    str(exc),
+                )
+
+        if successful_updates > 0:
+
+            self._set_connection_status(
+                "CONNECTED"
+            )
+
+        else:
+
+            self._set_connection_status(
+                "OFFLINE",
+                "No market data received",
+            )
+
+        self._refresh_stale_states()
+
+    # ============================================================
+    # TICKER PARSER
+    # ============================================================
+
+    def _parse_ticker(
         self,
-        resolution: str = "5m",
-        count: int = 100,
-    ) -> list[dict]:
-        """
-        Fetch recent OHLC candles.
+        symbol: str,
+        payload: dict,
+    ) -> MarketSnapshot:
 
-        This uses public REST market data only.
-        """
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "Invalid ticker payload"
+            )
 
-        if not self.symbol:
-
-            self.discover_symbol()
-
-        return self.client.get_recent_candles(
-            symbol=self.symbol,
-            resolution=resolution,
-            count=count,
+        ticker = payload.get(
+            "result",
+            payload,
         )
 
-    # ---------------------------------------------------------
-    # CLOSE
-    # ---------------------------------------------------------
+        if not isinstance(ticker, dict):
+            raise ValueError(
+                "Invalid ticker result"
+            )
 
-    def close(self) -> None:
-        """Stop the market feed."""
+        price = self._to_float(
+            ticker.get("close")
+        )
 
-        self.stop()
+        if price <= 0:
+
+            price = self._to_float(
+                ticker.get("mark_price")
+            )
+
+        quotes = ticker.get(
+            "quotes"
+        )
+
+        if not isinstance(
+            quotes,
+            dict,
+        ):
+            quotes = {}
+
+        bid = self._to_float(
+            quotes.get("best_bid")
+        )
+
+        if bid <= 0:
+            bid = self._to_float(
+                ticker.get("best_bid")
+            )
+
+        ask = self._to_float(
+            quotes.get("best_ask")
+        )
+
+        if ask <= 0:
+            ask = self._to_float(
+                ticker.get("best_ask")
+            )
+
+        volume = self._to_float(
+            ticker.get("volume")
+        )
+
+        if price <= 0:
+            raise ValueError(
+                "Invalid market price"
+            )
+
+        return MarketSnapshot(
+            symbol=symbol,
+            price=price,
+            bid=bid,
+            ask=ask,
+            volume=volume,
+            timestamp=time.time(),
+            status="LIVE",
+            source="REST",
+            error="",
+        )
+
+    # ============================================================
+    # SNAPSHOT UPDATE
+    # ============================================================
+
+    def _update_snapshot(
+        self,
+        snapshot: MarketSnapshot,
+    ) -> None:
+
+        callbacks: list[
+            Callable[[MarketSnapshot], None]
+        ]
+
+        with self._lock:
+
+            self._snapshots[
+                snapshot.symbol
+            ] = snapshot
+
+            callbacks = list(
+                self._callbacks
+            )
+
+        for callback in callbacks:
+
+            try:
+                callback(
+                    snapshot
+                )
+
+            except Exception:
+                # Callback errors must never
+                # stop market-data processing.
+                continue
+
+    # ============================================================
+    # ERROR HANDLING
+    # ============================================================
+
+    def _mark_error(
+        self,
+        symbol: str,
+        error: str,
+    ) -> None:
+
+        with self._lock:
+
+            snapshot = self._snapshots.get(
+                symbol
+            )
+
+            if snapshot is None:
+                return
+
+            snapshot.status = "ERROR"
+            snapshot.error = error
+
+    def _refresh_stale_states(self) -> None:
+
+        with self._lock:
+
+            for snapshot in (
+                self._snapshots.values()
+            ):
+
+                if snapshot.is_stale(
+                    self.stale_after
+                ):
+
+                    if snapshot.timestamp > 0:
+                        snapshot.status = "STALE"
+
+    # ============================================================
+    # UTILITIES
+    # ============================================================
+
+    @staticmethod
+    def _to_float(
+        value,
+    ) -> float:
+
+        try:
+
+            if value is None:
+                return 0.0
+
+            return float(value)
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return 0.0
+
+    # ============================================================
+    # HEALTH
+    # ============================================================
+
+    def health(self) -> dict:
+
+        snapshots = (
+            self.get_all_snapshots()
+        )
+
+        live_count = 0
+        stale_count = 0
+        error_count = 0
+
+        for snapshot in snapshots.values():
+
+            if snapshot.status == "LIVE":
+                live_count += 1
+
+            elif snapshot.status == "STALE":
+                stale_count += 1
+
+            elif snapshot.status == "ERROR":
+                error_count += 1
+
+        return {
+            "connection": self.connection_status,
+            "symbols": len(self.symbols),
+            "live": live_count,
+            "stale": stale_count,
+            "errors": error_count,
+            "last_error": self.last_error,
+        }
 
 
-# -------------------------------------------------------------
-# MANUAL TEST
-# -------------------------------------------------------------
+# ================================================================
+# DEFAULT FEED FACTORY
+# ================================================================
 
-if __name__ == "__main__":
+def create_market_feed(
+    callback: Optional[
+        Callable[[MarketSnapshot], None]
+    ] = None,
+) -> DeltaMarketFeed:
 
     feed = DeltaMarketFeed(
-        poll_interval=5.0,
-        timeout=10,
+        symbols=APPROVED_SYMBOLS,
+        rest_interval=DEFAULT_REST_INTERVAL,
+        stale_after=DEFAULT_STALE_AFTER,
     )
 
-    try:
-
-        snapshot = feed.update_once()
-
-        print(
-            "STATUS:",
-            snapshot.status,
+    if callback is not None:
+        feed.add_callback(
+            callback
         )
 
-        print(
-            "SYMBOL:",
-            snapshot.symbol,
-        )
-
-        print(
-            "PRICE:",
-            snapshot.price,
-        )
-
-        print(
-            "BID:",
-            snapshot.bid,
-        )
-
-        print(
-            "ASK:",
-            snapshot.ask,
-        )
-
-        print(
-            "VOLUME:",
-            snapshot.volume,
-        )
-
-        print(
-            "ERROR:",
-            snapshot.error,
-        )
-
-    finally:
-
-        feed.close()
+    return feed
