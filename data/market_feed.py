@@ -3,9 +3,10 @@ GARRY V7 SMC ICT TRADING BOT
 
 Delta Exchange India - Market Feed
 
-STEP 2:
+STEP 3:
 - Discovers BTC perpetual symbol
 - Fetches live ticker data
+- Parses Delta ticker bid/ask correctly
 - Provides recent OHLC candles
 - No API key
 - No authentication
@@ -57,13 +58,16 @@ class DeltaMarketFeed:
         self.client = DeltaPublicClient(timeout=timeout)
 
         self.symbol = symbol
+
         self.poll_interval = max(
             2.0,
             float(poll_interval),
         )
 
         self._running = False
+
         self._thread: Optional[threading.Thread] = None
+
         self._lock = threading.Lock()
 
         self._snapshot = MarketSnapshot(
@@ -92,9 +96,12 @@ class DeltaMarketFeed:
         """Register a callback for new market snapshots."""
 
         if not callable(callback):
-            raise TypeError("callback must be callable")
+            raise TypeError(
+                "callback must be callable"
+            )
 
         with self._lock:
+
             if callback not in self._callbacks:
                 self._callbacks.append(callback)
 
@@ -105,6 +112,7 @@ class DeltaMarketFeed:
         """Remove a previously registered callback."""
 
         with self._lock:
+
             if callback in self._callbacks:
                 self._callbacks.remove(callback)
 
@@ -118,10 +126,13 @@ class DeltaMarketFeed:
             callbacks = list(self._callbacks)
 
         for callback in callbacks:
+
             try:
                 callback(snapshot)
+
             except Exception:
-                # UI callback failure must not stop market feed.
+                # A callback failure must not stop
+                # the market-data feed.
                 continue
 
     # ---------------------------------------------------------
@@ -138,6 +149,7 @@ class DeltaMarketFeed:
         self,
         snapshot: MarketSnapshot,
     ) -> None:
+
         with self._lock:
             self._snapshot = snapshot
 
@@ -155,6 +167,7 @@ class DeltaMarketFeed:
         product = self.client.find_btc_perpetual()
 
         if not product:
+
             raise DeltaPublicAPIError(
                 "No active BTC perpetual product found"
             )
@@ -164,6 +177,7 @@ class DeltaMarketFeed:
         ).strip()
 
         if not symbol:
+
             raise DeltaPublicAPIError(
                 "Delta returned BTC product without symbol"
             )
@@ -184,12 +198,17 @@ class DeltaMarketFeed:
         """Safely convert API value to float."""
 
         try:
+
             if value is None:
                 return default
 
             return float(value)
 
-        except (TypeError, ValueError):
+        except (
+            TypeError,
+            ValueError,
+        ):
+
             return default
 
     # ---------------------------------------------------------
@@ -200,7 +219,20 @@ class DeltaMarketFeed:
         self,
         ticker: dict,
     ) -> MarketSnapshot:
-        """Convert Delta ticker response to MarketSnapshot."""
+        """
+        Convert Delta ticker response to MarketSnapshot.
+
+        Delta current ticker response provides:
+
+            close
+            volume
+            quotes.best_bid
+            quotes.best_ask
+        """
+
+        # -----------------------------------------------------
+        # SYMBOL
+        # -----------------------------------------------------
 
         symbol = str(
             ticker.get("symbol")
@@ -208,25 +240,62 @@ class DeltaMarketFeed:
             or ""
         )
 
+        # -----------------------------------------------------
+        # LAST TRADED PRICE
+        # -----------------------------------------------------
+
         price = self._number(
             ticker.get("close")
             or ticker.get("last_price")
             or ticker.get("price")
         )
 
+        # -----------------------------------------------------
+        # BID / ASK
+        # -----------------------------------------------------
+        #
+        # Delta returns these values inside:
+        #
+        # "quotes": {
+        #     "best_bid": "...",
+        #     "best_ask": "..."
+        # }
+        #
+        # We also keep fallback handling for older/alternate
+        # response formats.
+        # -----------------------------------------------------
+
+        quotes = ticker.get("quotes")
+
+        if not isinstance(
+            quotes,
+            dict,
+        ):
+            quotes = {}
+
         bid = self._number(
-            ticker.get("best_bid")
+            quotes.get("best_bid")
+            or ticker.get("best_bid")
             or ticker.get("bid")
         )
 
         ask = self._number(
-            ticker.get("best_ask")
+            quotes.get("best_ask")
+            or ticker.get("best_ask")
             or ticker.get("ask")
         )
+
+        # -----------------------------------------------------
+        # VOLUME
+        # -----------------------------------------------------
 
         volume = self._number(
             ticker.get("volume")
         )
+
+        # -----------------------------------------------------
+        # SNAPSHOT
+        # -----------------------------------------------------
 
         return MarketSnapshot(
             symbol=symbol,
@@ -243,7 +312,9 @@ class DeltaMarketFeed:
     # SINGLE MARKET UPDATE
     # ---------------------------------------------------------
 
-    def update_once(self) -> MarketSnapshot:
+    def update_once(
+        self,
+    ) -> MarketSnapshot:
         """
         Perform one public market-data update.
 
@@ -252,25 +323,52 @@ class DeltaMarketFeed:
         """
 
         try:
-            # Discover the symbol if one was not supplied.
+
+            # -------------------------------------------------
+            # Discover symbol if not already known.
+            # -------------------------------------------------
+
             if not self.symbol:
+
                 self.discover_symbol()
+
+            # -------------------------------------------------
+            # Fetch ticker.
+            # -------------------------------------------------
 
             ticker = self.client.get_ticker(
                 self.symbol
             )
 
+            # -------------------------------------------------
+            # Parse ticker.
+            # -------------------------------------------------
+
             snapshot = self._parse_ticker(
                 ticker
             )
 
-            # Reject invalid market price.
+            # -------------------------------------------------
+            # Validate price.
+            # -------------------------------------------------
+
             if snapshot.price <= 0:
+
                 raise DeltaPublicAPIError(
                     "Delta returned invalid market price"
                 )
 
-            self._set_snapshot(snapshot)
+            # -------------------------------------------------
+            # Save snapshot.
+            # -------------------------------------------------
+
+            self._set_snapshot(
+                snapshot
+            )
+
+            # -------------------------------------------------
+            # Notify listeners.
+            # -------------------------------------------------
 
             self._notify_callbacks(
                 snapshot
@@ -279,6 +377,7 @@ class DeltaMarketFeed:
             return snapshot
 
         except Exception as exc:
+
             error_message = str(exc)
 
             snapshot = MarketSnapshot(
@@ -292,7 +391,9 @@ class DeltaMarketFeed:
                 error=error_message,
             )
 
-            self._set_snapshot(snapshot)
+            self._set_snapshot(
+                snapshot
+            )
 
             self._notify_callbacks(
                 snapshot
@@ -308,12 +409,14 @@ class DeltaMarketFeed:
         """Run public market-data polling in background."""
 
         while self._running:
+
             started = time.monotonic()
 
             self.update_once()
 
             elapsed = (
-                time.monotonic() - started
+                time.monotonic()
+                - started
             )
 
             wait_time = max(
@@ -322,7 +425,10 @@ class DeltaMarketFeed:
             )
 
             if wait_time > 0:
-                time.sleep(wait_time)
+
+                time.sleep(
+                    wait_time
+                )
 
     # ---------------------------------------------------------
     # START
@@ -333,6 +439,7 @@ class DeltaMarketFeed:
         Start background market-data polling.
 
         Returns:
+
             True  = started
             False = already running
         """
@@ -361,6 +468,7 @@ class DeltaMarketFeed:
         Stop background market-data polling.
 
         Returns:
+
             True  = stopped
             False = already stopped
         """
@@ -377,6 +485,7 @@ class DeltaMarketFeed:
             and thread.is_alive()
             and thread is not threading.current_thread()
         ):
+
             thread.join(
                 timeout=2.0
             )
@@ -411,6 +520,7 @@ class DeltaMarketFeed:
         """
 
         if not self.symbol:
+
             self.discover_symbol()
 
         return self.client.get_recent_candles(
