@@ -17,7 +17,7 @@ source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas
 
 # Python runtime dependencies
-requirements = python3,kivy==2.3.1,requests==2.25.1,chardet==4.0.0,idna==2.10,urllib3==1.26.20,certifi
+requirements = python3,kivy
 
 # Application entry point
 # main.py is the ONLY application entry point.
