@@ -1,73 +1,86 @@
 [app]
 
-# ============================================================
-# GARRY V7 SMC ICT TRADING BOT
-# Clean, self-contained Android application
-# ============================================================
-
-# Application identity
+# (str) Title of your application
 title = GARRY V7 SMC ICT TRADING BOT
+
+# (str) Package name
 package.name = garryv7
+
+# (str) Package domain
 package.domain = com.garryv7
 
-# Source directory
+# (str) Source code directory
 source.dir = .
 
-# Files to include in the APK
-source.include_exts = py,png,jpg,jpeg,kv,atlas
+# (str) List of source file extensions
+source.include_exts = py,png,jpg,jpeg,kv,atlas,json
 
-# Python runtime dependencies
-requirements = python3,kivy,charset-normalizer==2.1.1
+# (list) Application requirements
+# IMPORTANT: Keep this minimal for the first successful APK build.
+requirements = python3,kivy
 
-# Application entry point
-# main.py is the ONLY application entry point.
-android.entrypoint = org.kivy.android.PythonActivity
-
-# Application version
+# (str) Application version
 version = 1.0.0
 
-# Screen orientation
+# (str) Supported orientation
 orientation = portrait
 
-# Fullscreen disabled
+# (bool) Fullscreen
 fullscreen = 0
 
 
-# ============================================================
-# ANDROID CONFIGURATION
-# ============================================================
+# ------------------------------------------------------------------
+# ANDROID
+# ------------------------------------------------------------------
 
-# Target Android API
-android.api = 35
+# Android API
+android.api = 34
 
-# Minimum supported Android API
+# Minimum Android API
 android.minapi = 24
 
-# Android NDK
-android.ndk = 28c
-android.ndk_path = /usr/local/lib/android/sdk/ndk/28.2.13676358
+# Android NDK version
+android.ndk = 25b
+
+# Exact NDK path used by GitHub Actions
+android.ndk_path = /usr/local/lib/android/sdk/ndk/25.2.9519653
 
 # NDK API
 android.ndk_api = 24
 
-# Build only for modern 64-bit Android devices
+# Build only 64-bit ARM
 android.archs = arm64-v8a
 
-# Automatically accept Android SDK licenses in CI
+# Accept Android SDK licenses
 android.accept_sdk_license = True
 
+# Debug APK
+android.debug_artifact = apk
 
-# ============================================================
-# BUILD CONFIGURATION
-# ============================================================
+
+# ------------------------------------------------------------------
+# PYTHON-FOR-ANDROID
+# ------------------------------------------------------------------
+
+# Stable p4a release
+p4a.branch = v2024.01.21
+
+# Exact p4a commit for deterministic build
+p4a.commit = 957a3e5
+
+# Local custom recipes
+# Kept available, but charset-normalizer is NOT requested in requirements.
 p4a.local_recipes = ./p4a_recipes
+
+
+# ------------------------------------------------------------------
+# BUILDOSER
+# ------------------------------------------------------------------
+
 [buildozer]
 
-# Buildozer log level
 log_level = 2
 
-# Build directory
 build_dir = .buildozer
 
-# APK output directory
 bin_dir = bin
