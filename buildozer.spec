@@ -17,7 +17,7 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,json
 
 # (list) Application requirements
 # IMPORTANT: Keep this minimal for the first successful APK build.
-requirements = python3,kivy
+requirements = python3,kivy,websocket-client
 
 # (str) Application version
 version = 1.0.0
