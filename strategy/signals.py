@@ -1,19 +1,8 @@
 """
 GARRY V7 SMC ICT TRADING BOT
 
-Signal analysis layer.
-
-This module converts market-structure, SMC, and ICT analysis
-into a deterministic analysis result.
-
-Important:
-- Analysis only.
-- Real trading is disabled.
-- No broker/API dependency.
-- No guaranteed accuracy or profit claim.
-- BUY is only an analysis result, not an order instruction.
-
-This module is completely independent of GARRY V8.
+Deterministic BUY / SELL / NO TRADE analysis.
+Analysis only. Does not place exchange orders.
 """
 
 from dataclasses import dataclass
@@ -25,12 +14,12 @@ from strategy.market_structure import MarketStructureResult
 from strategy.smc import SMCResult
 
 
-SignalType = Literal["BUY", "NO TRADE"]
+SignalType = Literal["BUY", "SELL", "NO TRADE"]
 
 
 @dataclass(frozen=True)
 class SignalResult:
-    """Final deterministic signal-analysis result."""
+    """Final signal-analysis result."""
 
     signal: SignalType
     reason: str
@@ -41,53 +30,151 @@ class SignalResult:
 
 
 def _latest_price(candles: list[Candle]) -> float:
-    """Return the latest candle close price."""
-
     if not candles:
         return 0.0
-
     return candles[-1].close
 
 
 def _find_reference_stop(
     candles: list[Candle],
     market_structure: MarketStructureResult,
+    side: Literal["BUY", "SELL"],
 ) -> float:
-    """
-    Find a conservative reference stop level for BUY analysis.
+    """Find a reference SL from the latest swing or candle."""
 
-    Priority:
-    1. Latest confirmed swing low.
-    2. Latest candle low.
+    if side == "BUY":
+        if market_structure.swing_lows:
+            return market_structure.swing_lows[-1].price
+        return candles[-1].low if candles else 0.0
 
-    This is a reference level only and does not place an order.
-    """
-
-    if market_structure.swing_lows:
-        return market_structure.swing_lows[-1].price
-
-    if candles:
-        return candles[-1].low
-
-    return 0.0
+    if market_structure.swing_highs:
+        return market_structure.swing_highs[-1].price
+    return candles[-1].high if candles else 0.0
 
 
-def _calculate_reference_tp(
-    entry: float,
-    stop_loss: float,
-) -> float:
-    """
-    Calculate a reference TP using a fixed 2:1 risk/reward ratio.
+def _no_trade(
+    reason: str,
+    entry: float = 0.0,
+) -> SignalResult:
+    return SignalResult(
+        signal="NO TRADE",
+        reason=reason,
+        entry=entry,
+        reference_stop_loss=0.0,
+        reference_take_profit=0.0,
+        risk_reward=0.0,
+    )
 
-    This is an analytical reference, not a trading instruction.
-    """
 
-    risk = entry - stop_loss
+def _directional_analysis(
+    side: Literal["BUY", "SELL"],
+    candles: list[Candle],
+    market_structure: MarketStructureResult,
+    smc: SMCResult,
+    ict: ICTAnalysis,
+) -> SignalResult:
+    if not candles:
+        return _no_trade("No market data available.")
 
-    if risk <= 0:
-        return entry
+    entry = _latest_price(candles)
 
-    return entry + (risk * 2.0)
+    if entry <= 0:
+        return _no_trade("Invalid latest candle close price.", entry)
+
+    if side == "BUY":
+        expected_trend = "BULLISH"
+        directional_fvg = "BULLISH"
+        directional_ob = "BULLISH"
+        directional_idm = "BULLISH"
+    else:
+        expected_trend = "BEARISH"
+        directional_fvg = "BEARISH"
+        directional_ob = "BEARISH"
+        directional_idm = "BEARISH"
+
+    confirmations = sum((
+        any(g.gap_type == directional_fvg for g in smc.fvg),
+        any(b.block_type == directional_ob for b in smc.order_blocks),
+        any(i.idm_type == directional_idm for i in smc.idm),
+    ))
+
+    if (
+        market_structure.trend != expected_trend
+        or ict.bias != expected_trend
+        or ict.setup_quality != "VALID"
+        or confirmations < 2
+    ):
+        return _no_trade(
+            f"{side} conditions not fully confirmed. Wait for "
+            "matching market structure, ICT bias and at least "
+            "two directional SMC confirmations.",
+            entry,
+        )
+
+    stop_loss = _find_reference_stop(
+        candles,
+        market_structure,
+        side,
+    )
+
+    if side == "BUY":
+        risk = entry - stop_loss
+    else:
+        risk = stop_loss - entry
+
+    if stop_loss <= 0 or risk <= 0:
+        return _no_trade(
+            f"{side} setup has no valid reference stop-loss.",
+            entry,
+        )
+
+    # Analytical reference target at 2:1 risk/reward.
+    if side == "BUY":
+        take_profit = entry + (2.0 * risk)
+    else:
+        take_profit = entry - (2.0 * risk)
+
+    if take_profit <= 0:
+        return _no_trade(
+            "Calculated reference target is invalid.",
+            entry,
+        )
+
+    return SignalResult(
+        signal=side,
+        reason=(
+            f"{side} confirmed by matching market structure, "
+            "valid ICT context and at least two directional "
+            "SMC confirmations."
+        ),
+        entry=entry,
+        reference_stop_loss=stop_loss,
+        reference_take_profit=take_profit,
+        risk_reward=2.0,
+    )
+
+
+def generate_signal(
+    candles: list[Candle],
+    market_structure: MarketStructureResult,
+    smc: SMCResult,
+    ict: ICTAnalysis,
+) -> SignalResult:
+    """Choose BUY or SELL from confirmed ICT direction."""
+
+    if ict.bias == "BULLISH":
+        return _directional_analysis(
+            "BUY", candles, market_structure, smc, ict
+        )
+
+    if ict.bias == "BEARISH":
+        return _directional_analysis(
+            "SELL", candles, market_structure, smc, ict
+        )
+
+    return _no_trade(
+        "ICT bias is neutral. No trade."
+    , _latest_price(candles))
 
 
 def generate_buy_analysis(
@@ -96,109 +183,8 @@ def generate_buy_analysis(
     smc: SMCResult,
     ict: ICTAnalysis,
 ) -> SignalResult:
-    """
-    Generate a BUY or NO TRADE analysis.
+    """Backward-compatible BUY-only analysis function."""
 
-    BUY requires:
-    - Valid bullish ICT setup.
-    - Bullish market structure.
-    - At least two bullish SMC confirmations.
-
-    Otherwise NO TRADE is returned.
-    """
-
-    if not candles:
-        return SignalResult(
-            signal="NO TRADE",
-            reason="No market data available.",
-            entry=0.0,
-            reference_stop_loss=0.0,
-            reference_take_profit=0.0,
-            risk_reward=0.0,
-        )
-
-    entry = _latest_price(candles)
-
-    bullish_fvg = any(
-        gap.gap_type == "BULLISH"
-        for gap in smc.fvg
-    )
-
-    bullish_ob = any(
-        block.block_type == "BULLISH"
-        for block in smc.order_blocks
-    )
-
-    bullish_idm = any(
-        level.idm_type == "BULLISH"
-        for level in smc.idm
-    )
-
-    bullish_confirmations = sum(
-        (
-            bullish_fvg,
-            bullish_ob,
-            bullish_idm,
-        )
-    )
-
-    if (
-        market_structure.trend != "BULLISH"
-        or ict.bias != "BULLISH"
-        or ict.setup_quality != "VALID"
-        or bullish_confirmations < 2
-    ):
-        return SignalResult(
-            signal="NO TRADE",
-            reason=(
-                "BUY conditions are not fully confirmed. "
-                "Wait for stronger bullish structure and SMC/ICT confirmation."
-            ),
-            entry=entry,
-            reference_stop_loss=0.0,
-            reference_take_profit=0.0,
-            risk_reward=0.0,
-        )
-
-    stop_loss = _find_reference_stop(
-        candles,
-        market_structure,
-    )
-
-    if stop_loss >= entry or stop_loss <= 0:
-        return SignalResult(
-            signal="NO TRADE",
-            reason=(
-                "Bullish conditions exist, but a valid reference "
-                "stop-loss level is not available."
-            ),
-            entry=entry,
-            reference_stop_loss=0.0,
-            reference_take_profit=0.0,
-            risk_reward=0.0,
-        )
-
-    take_profit = _calculate_reference_tp(
-        entry,
-        stop_loss,
-    )
-
-    risk = entry - stop_loss
-
-    risk_reward = (
-        (take_profit - entry) / risk
-        if risk > 0
-        else 0.0
-    )
-
-    return SignalResult(
-        signal="BUY",
-        reason=(
-            "Bullish market structure with valid ICT context "
-            "and multiple bullish SMC confirmations."
-        ),
-        entry=entry,
-        reference_stop_loss=stop_loss,
-        reference_take_profit=take_profit,
-        risk_reward=risk_reward,
+    return _directional_analysis(
+        "BUY", candles, market_structure, smc, ict
     )
