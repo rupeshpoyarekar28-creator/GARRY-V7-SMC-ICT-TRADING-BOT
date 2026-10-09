@@ -2,7 +2,6 @@
 """
 GARRY V7 SMC ICT TRADING BOT
 Responsive Dashboard UI.
-Existing pages and approved symbols preserved.
 """
 
 from kivy.metrics import dp, sp
@@ -23,13 +22,10 @@ from app.state import APPROVED_SYMBOLS, AppState
 BG = (0.025, 0.023, 0.035, 1)
 CARD = (0.075, 0.070, 0.095, 1)
 CARD2 = (0.105, 0.095, 0.135, 1)
-
 WHITE = (0.96, 0.95, 1, 1)
 MUTED = (0.58, 0.56, 0.65, 1)
-
 PURPLE = (0.48, 0.28, 0.95, 1)
 PURPLE_LIGHT = (0.67, 0.52, 1, 1)
-
 GREEN = (0.20, 0.85, 0.48, 1)
 RED = (0.95, 0.25, 0.32, 1)
 ORANGE = (1.0, 0.62, 0.20, 1)
@@ -175,8 +171,7 @@ class DashboardUI(BoxLayout):
 
     def _get_scale(self):
         width = Window.width or dp(390)
-        base_width = dp(390)
-        return max(0.82, min(1.12, width / base_width))
+        return max(0.82, min(1.12, width / dp(390)))
 
     def d(self, value):
         return dp(value) * self.scale
@@ -287,10 +282,10 @@ class DashboardUI(BoxLayout):
             ),
             spacing=self.d(10),
         )
-
         container.bind(
             minimum_height=container.setter("height")
         )
+
         scroll.add_widget(container)
         self.page.add_widget(scroll)
         return container
@@ -303,11 +298,15 @@ class DashboardUI(BoxLayout):
             spacing=self.d(2),
         )
 
-        box.add_widget(self.label(title, 24, True))
+        box.add_widget(
+            self.label(title, 24, True, WHITE, "center")
+        )
 
         if subtitle:
             box.add_widget(
-                self.label(subtitle, 11, True, PURPLE_LIGHT)
+                self.label(
+                    subtitle, 11, True, PURPLE_LIGHT, "center"
+                )
             )
 
         return box
@@ -328,18 +327,22 @@ class DashboardUI(BoxLayout):
         self.nav_buttons = {}
 
         pages = [
-            ("HOME", "⌂\nHome"),
-            ("MARKETS", "◈\nMarkets"),
-            ("TRADES", "▣\nTrades"),
-            ("ANALYSIS", "⌁\nAnalysis"),
-            ("SETTINGS", "⚙\nSettings"),
+            ("HOME", "⌂\nHOME"),
+            ("MARKETS", "◉\nMARKETS"),
+            ("TRADES", "▤\nTRADES"),
+            ("ANALYSIS", "⌁\nANALYSIS"),
+            ("SETTINGS", "⚙\nSETTINGS"),
         ]
 
         for page_name, text in pages:
             button = Button(
                 text=text,
-                font_size=self.f(10),
-                color=PURPLE_LIGHT if page_name == self.current_page else MUTED,
+                font_size=self.f(9),
+                color=(
+                    PURPLE_LIGHT
+                    if page_name == self.current_page
+                    else MUTED
+                ),
                 background_normal="",
                 background_down="",
                 background_color=BG,
@@ -360,7 +363,7 @@ class DashboardUI(BoxLayout):
                 if page_name == self.current_page
                 else MUTED
             )
-            button.font_size = self.f(10)
+            button.font_size = self.f(9)
 
     def navigate(self, page):
         self.current_page = page
@@ -392,7 +395,9 @@ class DashboardUI(BoxLayout):
 
         system = self.make_card(height=82)
         status_box = BoxLayout(orientation="vertical")
-        status_box.add_widget(self.label("SYSTEM STATUS", 10, False, MUTED))
+        status_box.add_widget(
+            self.label("SYSTEM STATUS", 10, False, MUTED)
+        )
         status_box.add_widget(
             self.label("NOT CONNECTED", 17, True, ORANGE)
         )
@@ -412,7 +417,9 @@ class DashboardUI(BoxLayout):
             height=self.d(40),
             spacing=self.d(6),
         )
-        top_row.add_widget(self.label("MARKET", 12, True, MUTED))
+        top_row.add_widget(
+            self.label("MARKET", 12, True, MUTED)
+        )
 
         selector = Spinner(
             text=self.state.symbol,
@@ -429,10 +436,14 @@ class DashboardUI(BoxLayout):
         market.add_widget(top_row)
 
         market.add_widget(
-            self.label("LIVE DATA PENDING", 25, True, WHITE, "center")
+            self.label(
+                "LIVE DATA PENDING", 25, True, WHITE, "center"
+            )
         )
         market.add_widget(
-            self.label("Delta Exchange India", 12, False, MUTED, "center")
+            self.label(
+                "Delta Exchange India", 12, False, MUTED, "center"
+            )
         )
 
         stats = GridLayout(
@@ -459,15 +470,16 @@ class DashboardUI(BoxLayout):
             orientation="vertical",
             height=138,
         )
-        signal.add_widget(self.label("CURRENT SIGNAL", 11, True, MUTED))
-        signal.add_widget(self.label("WAITING", 25, True, WHITE, "center"))
+        signal.add_widget(
+            self.label("CURRENT SIGNAL", 11, True, MUTED)
+        )
+        signal.add_widget(
+            self.label("WAITING", 25, True, WHITE, "center")
+        )
         signal.add_widget(
             self.label(
                 "Waiting for valid SMC / ICT confirmation",
-                11,
-                False,
-                MUTED,
-                "center",
+                11, False, MUTED, "center"
             )
         )
         container.add_widget(signal)
@@ -476,15 +488,21 @@ class DashboardUI(BoxLayout):
             orientation="vertical",
             height=170,
         )
-        levels.add_widget(self.label("TRADE LEVELS", 12, True, MUTED))
+        levels.add_widget(
+            self.label("TRADE LEVELS", 12, True, MUTED)
+        )
 
-        for name in ["ENTRY", "STOP LOSS", "TAKE PROFIT", "RISK", "R:R"]:
+        for name in [
+            "ENTRY", "STOP LOSS", "TAKE PROFIT", "RISK", "R:R"
+        ]:
             row = BoxLayout(
                 size_hint_y=None,
                 height=self.d(26),
             )
             row.add_widget(self.label(name, 11, False, MUTED))
-            row.add_widget(self.label("--", 11, True, WHITE, "right"))
+            row.add_widget(
+                self.label("--", 11, True, WHITE, "right")
+            )
             levels.add_widget(row)
 
         container.add_widget(levels)
@@ -513,7 +531,9 @@ class DashboardUI(BoxLayout):
             card = self.make_card(height=66)
             card.add_widget(self.label(symbol, 15, True))
             card.add_widget(
-                self.label("LIVE DATA PENDING", 10, False, MUTED, "right")
+                self.label(
+                    "LIVE DATA PENDING", 10, False, MUTED, "right"
+                )
             )
             container.add_widget(card)
 
@@ -545,7 +565,9 @@ class DashboardUI(BoxLayout):
                 height=self.d(30),
             )
             row.add_widget(self.label(name, 11, False, MUTED))
-            row.add_widget(self.label(value, 12, True, WHITE, "right"))
+            row.add_widget(
+                self.label(value, 12, True, WHITE, "right")
+            )
             statistics.add_widget(row)
 
         container.add_widget(statistics)
@@ -578,7 +600,9 @@ class DashboardUI(BoxLayout):
         for item in analysis_items:
             card = self.make_card(height=56)
             card.add_widget(self.label(item, 11, False, MUTED))
-            card.add_widget(self.label("WAITING", 11, True, WHITE, "right"))
+            card.add_widget(
+                self.label("WAITING", 11, True, WHITE, "right")
+            )
             container.add_widget(card)
 
     # ---------------------------------------------------------
@@ -634,9 +658,7 @@ class DashboardUI(BoxLayout):
         api.add_widget(
             self.label(
                 "Never store API secrets in source code or logs.",
-                9,
-                False,
-                MUTED,
+                9, False, MUTED
             )
         )
 
@@ -663,10 +685,16 @@ class DashboardUI(BoxLayout):
         )
         mode.add_widget(self.label("TRADING MODE", 13, True))
         mode.add_widget(
-            self.label("DEMO  •  PAPER  •  LIVE", 15, True, PURPLE_LIGHT)
+            self.label(
+                "DEMO  •  PAPER  •  LIVE",
+                15, True, PURPLE_LIGHT
+            )
         )
         mode.add_widget(
-            self.label("LIVE TRADING OFF BY DEFAULT", 10, True, MUTED)
+            self.label(
+                "LIVE TRADING OFF BY DEFAULT",
+                10, True, MUTED
+            )
         )
 
         emergency = self.button("EMERGENCY STOP", 44)
