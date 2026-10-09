@@ -15,7 +15,7 @@ from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
-from kivy.uix.widget import Widget
+from kivy.uix.popup import Popup
 
 from app.state import APPROVED_SYMBOLS, AppState
 
@@ -94,6 +94,80 @@ class DashboardUI(BoxLayout):
 
         self.show_home()
         Window.bind(size=self._on_window_size)
+
+    # ---------------------------------------------------------
+    # BUTTON ACTIONS
+    # ---------------------------------------------------------
+
+    def show_notice(self, title, message):
+        content = BoxLayout(
+            orientation="vertical",
+            padding=dp(16),
+            spacing=dp(12),
+        )
+
+        message_label = Label(
+            text=message,
+            color=WHITE,
+            halign="center",
+            valign="middle",
+        )
+        message_label.bind(
+            size=lambda instance, value:
+            setattr(instance, "text_size", value)
+        )
+        content.add_widget(message_label)
+
+        close_button = Button(
+            text="OK",
+            size_hint_y=None,
+            height=dp(44),
+            background_normal="",
+            background_color=PURPLE,
+            color=WHITE,
+        )
+        content.add_widget(close_button)
+
+        popup = Popup(
+            title=title,
+            content=content,
+            size_hint=(0.85, None),
+            height=dp(230),
+            auto_dismiss=False,
+        )
+        close_button.bind(on_release=popup.dismiss)
+        popup.open()
+
+    def stop_bot(self, *_):
+        self.state.trading_enabled = False
+        self.show_notice(
+            "BOT STATUS",
+            "Dashboard trading flag is OFF.\n\n"
+            "No live trading engine is connected yet. "
+            "This does not stop an external or VPS process.",
+        )
+
+    def save_api_notice(self, *_):
+        self.show_notice(
+            "API SETUP",
+            "API credentials have NOT been saved.\n\n"
+            "Secure backend integration is required first.",
+        )
+
+    def test_api_notice(self, *_):
+        self.show_notice(
+            "API CONNECTION",
+            "API connection has NOT been tested.\n\n"
+            "Delta Exchange integration is not connected yet.",
+        )
+
+    def emergency_stop(self, *_):
+        self.state.trading_enabled = False
+        self.show_notice(
+            "EMERGENCY STOP",
+            "Dashboard trading flag is OFF.\n\n"
+            "This is not a real exchange or VPS kill switch yet.",
+        )
 
     # ---------------------------------------------------------
     # RESPONSIVE HELPERS
@@ -417,6 +491,7 @@ class DashboardUI(BoxLayout):
 
         stop = self.button("STOP BOT", 48)
         stop.color = RED
+        stop.bind(on_release=self.stop_bot)
         container.add_widget(stop)
 
     def change_symbol(self, spinner, value):
@@ -570,8 +645,15 @@ class DashboardUI(BoxLayout):
             height=self.d(44),
             spacing=self.d(8),
         )
-        buttons.add_widget(self.button("SAVE", 44, True))
-        buttons.add_widget(self.button("TEST", 44))
+
+        save_button = self.button("SAVE", 44, True)
+        save_button.bind(on_release=self.save_api_notice)
+        buttons.add_widget(save_button)
+
+        test_button = self.button("TEST", 44)
+        test_button.bind(on_release=self.test_api_notice)
+        buttons.add_widget(test_button)
+
         api.add_widget(buttons)
         container.add_widget(api)
 
@@ -589,5 +671,6 @@ class DashboardUI(BoxLayout):
 
         emergency = self.button("EMERGENCY STOP", 44)
         emergency.color = RED
+        emergency.bind(on_release=self.emergency_stop)
         mode.add_widget(emergency)
         container.add_widget(mode)
