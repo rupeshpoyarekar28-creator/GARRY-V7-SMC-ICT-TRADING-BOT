@@ -1,30 +1,36 @@
+
 """
 GARRY V7 SMC ICT TRADING BOT
 
-Clean Android application entry point.
-
-This file connects the application state with the
-GARRY V7 dashboard UI.
-
-No dependency on the old GARRY V8 project is used.
-Real trading execution is disabled.
+Login-gated Android dashboard entry point.
 """
 
 from kivy.app import App
 
 from app.state import create_default_state
 from app.ui import DashboardUI
+from app.login import LoginScreen
 
 
 class GarryV7App(App):
-    """Main application for GARRY V7 SMC ICT TRADING BOT."""
+    """GARRY V7 application."""
 
     def build(self):
         self.title = "GARRY V7 SMC ICT TRADING BOT"
 
-        state = create_default_state()
+        self.state = create_default_state()
+        self.dashboard = DashboardUI(state=self.state)
 
-        return DashboardUI(state=state)
+        # Dashboard is created but remains hidden until login succeeds.
+        self.root_layout = LoginScreen(
+            on_login=self.open_dashboard
+        )
+
+        return self.root_layout
+
+    def open_dashboard(self):
+        self.root_layout.clear_widgets()
+        self.root_layout.add_widget(self.dashboard)
 
 
 if __name__ == "__main__":
