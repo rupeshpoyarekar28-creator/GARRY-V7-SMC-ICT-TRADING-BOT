@@ -3,69 +3,76 @@ name: GARRY V7 Android APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    name: Build Android debug APK
+  test-and-build:
+    name: Test Paper Trading and Build APK
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     env:
       ANDROID_NDK_VERSION: 25.2.9519653
       ANDROID_API_LEVEL: 34
       BUILD_TOOLS_VERSION: 34.0.0
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     steps:
-
-      # ------------------------------------------------------------
       # 1. Checkout repository
-      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # ------------------------------------------------------------
-      # 2. Setup Python 3.11
-      # ------------------------------------------------------------
+      # 2. Setup Python
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
+      # 3. Verify Python and repository files
+      - name: Verify project files
+        shell: bash
+        run: |
+          set -e
+          python --version
+          test -f main.py
+          test -f buildozer.spec
+          test -f strategy/paper_trading.py
+          test -f strategy/risk.py
+          test -f tests/test_paper_trading.py
+          echo "Required project files found."
 
-      # ------------------------------------------------------------
-      # 3. Setup Java 17
-      # ------------------------------------------------------------
+      # 4. Run Paper Trading unit tests BEFORE building
+      - name: Run Paper Trading Unit Tests
+        shell: bash
+        run: |
+          set -e
+          python -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+      # 5. Setup Java
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # ------------------------------------------------------------
-      # 4. Setup Android SDK
-      # ------------------------------------------------------------
-      # IMPORTANT:
-      # v4 no longer requests the retired "tools" package.
-      # ------------------------------------------------------------
+      # 6. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: "platform-tools"
 
-
-      # ------------------------------------------------------------
-      # 5. Install required Android SDK components
-      # ------------------------------------------------------------
+      # 7. Install Android SDK components
       - name: Install Android SDK components
         shell: bash
         run: |
           set -e
 
-          echo "Accepting Android SDK licenses..."
-
-          yes | sdkmanager --licenses > /dev/null || true
-
-          echo "Installing required Android SDK components..."
+          yes | sdkmanager --licenses >/dev/null || true
 
           sdkmanager \
             "platform-tools" \
@@ -73,16 +80,7 @@ jobs:
             "build-tools;${BUILD_TOOLS_VERSION}" \
             "ndk;${ANDROID_NDK_VERSION}"
 
-          echo ""
-          echo "========== INSTALLED ANDROID SDK =========="
-
-          sdkmanager --list_installed | \
-            grep -E "platforms;android|build-tools|ndk;" || true
-
-
-      # ------------------------------------------------------------
-      # 6. Verify build environment
-      # ------------------------------------------------------------
+      # 8. Verify build environment
       - name: Verify build environment
         shell: bash
         run: |
@@ -91,145 +89,78 @@ jobs:
           echo "========== PYTHON =========="
           python --version
 
-          echo ""
           echo "========== JAVA =========="
           java -version
 
-          echo ""
-          echo "========== ANDROID SDK =========="
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-
-          echo ""
           echo "========== SDKMANAGER =========="
-          which sdkmanager
+          command -v sdkmanager
           sdkmanager --version
 
-          echo ""
-          echo "========== NDK =========="
+          echo "========== ANDROID COMPONENTS =========="
+          test -d "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          test -d "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
+          test -d "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}"
 
-          test -d \
-            "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          echo "Android SDK components verified."
 
-          echo "NDK found:"
-          echo "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
-
-          echo ""
-          echo "========== BUILD TOOLS =========="
-
-          test -d \
-            "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
-
-          echo "Build tools found:"
-          echo "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
-
-          echo ""
-          echo "========== PLATFORM =========="
-
-          test -d \
-            "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}"
-
-          echo "Android platform found:"
-          echo "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}"
-
-
-      # ------------------------------------------------------------
-      # 7. Install Buildozer dependencies
-      # ------------------------------------------------------------
+      # 9. Install Buildozer dependencies
       - name: Install Buildozer dependencies
         shell: bash
         run: |
           set -e
 
-          python -m pip install \
-            --upgrade \
-            pip \
-            setuptools \
-            wheel
+          python -m pip install --upgrade \
+            pip setuptools wheel
 
           python -m pip install \
             buildozer==1.6.0 \
             cython==0.29.34 \
             virtualenv
 
-
-      # ------------------------------------------------------------
-      # 8. Verify Buildozer
-      # ------------------------------------------------------------
+      # 10. Verify Buildozer
       - name: Verify Buildozer
         shell: bash
         run: |
           set -e
-
-          echo "========== BUILDOZER =========="
-
           buildozer --version
-
-          echo ""
-          echo "========== CYTHON =========="
-
           cython --version
 
-
-      # ------------------------------------------------------------
-      # 9. Clean previous build/cache
-      # ------------------------------------------------------------
-      - name: Clean Buildozer build
+      # 11. Clean previous build output
+      - name: Clean build output
         shell: bash
         run: |
           set -e
-
           rm -rf .buildozer
           rm -rf bin
+          echo "Build output cleaned."
 
-          echo "Build directories cleaned."
-
-
-      # ------------------------------------------------------------
-      # 10. Show build configuration
-      # ------------------------------------------------------------
+      # 12. Show build configuration
       - name: Show build configuration
         shell: bash
         run: |
-          echo "========== buildozer.spec =========="
+          set -e
+          echo "========== BUILDOZER CONFIG =========="
           cat buildozer.spec
 
-          echo ""
-          echo "========== requirements.txt =========="
-
+          echo "========== REQUIREMENTS =========="
           if [ -f requirements.txt ]; then
             cat requirements.txt
-          else
-            echo "requirements.txt not found"
           fi
 
-
-      # ------------------------------------------------------------
-      # 11. Build APK
-      # ------------------------------------------------------------
+      # 13. Build Android debug APK
       - name: Build Android debug APK
         shell: bash
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
         run: |
           set -e
-
-          echo "Starting Buildozer Android debug build..."
-
           buildozer -v android debug
 
-
-      # ------------------------------------------------------------
-      # 12. Verify APK
-      # ------------------------------------------------------------
+      # 14. Verify APK exists
       - name: Verify APK
         shell: bash
         run: |
           set -e
 
-          echo "========== BIN DIRECTORY =========="
-
+          echo "========== APK OUTPUT =========="
           ls -lah bin
 
           APK_COUNT=$(find bin \
@@ -237,13 +168,10 @@ jobs:
             -type f \
             -name "*.apk" | wc -l)
 
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: APK was not generated."
+          if [ "$APK_COUNT" -lt 1 ]; then
+            echo "ERROR: No APK generated."
             exit 1
           fi
-
-          echo ""
-          echo "APK generated successfully:"
 
           find bin \
             -maxdepth 1 \
@@ -251,13 +179,11 @@ jobs:
             -name "*.apk" \
             -print
 
-
-      # ------------------------------------------------------------
-      # 13. Upload APK artifact
-      # ------------------------------------------------------------
+      # 15. Upload APK artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: GARRY-V7-SMC-ICT-TRADING-BOT-debug
           path: bin/*.apk
           if-no-files-found: error
+          retention-days: 14
