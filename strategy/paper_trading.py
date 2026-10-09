@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 DEFAULT_TP_POINTS = 20.0
 DEFAULT_SL_POINTS = 15.0
-MAX_TRADES_PER_DAY = 1
+MAX_TRADES_PER_DAY = 4
 
 
 class PaperTradingError(ValueError):
@@ -94,7 +94,7 @@ class PaperTrader:
             t["opened_at"][:10] == today for t in self.trades
         )
         if today_count >= MAX_TRADES_PER_DAY:
-            raise PaperTradingError("Daily limit: one trade")
+            raise PaperTradingError("Daily limit: four trades reached")
 
         if side == "BUY":
             sl = entry - DEFAULT_SL_POINTS
