@@ -1,12 +1,18 @@
-
 """
 GARRY V7 SMC ICT TRADING BOT
-Responsive Dashboard UI.
+Responsive Dashboard UI
 """
+
+from math import cos, sin, pi
 
 from kivy.metrics import dp, sp
 from kivy.core.window import Window
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import (
+    Color,
+    RoundedRectangle,
+    Line,
+    Ellipse,
+)
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
@@ -15,6 +21,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
+from kivy.uix.widget import Widget
 
 from app.state import APPROVED_SYMBOLS, AppState
 
@@ -32,7 +39,6 @@ ORANGE = (1.0, 0.62, 0.20, 1)
 
 
 class Card(BoxLayout):
-
     def __init__(self, scale=1.0, **kwargs):
         self.scale = scale
         kwargs.setdefault("padding", dp(14) * scale)
@@ -53,8 +59,178 @@ class Card(BoxLayout):
         self.bg.size = self.size
 
 
-class DashboardUI(BoxLayout):
+class NavIcon(Widget):
+    """Draws clean vector navigation icons without font glyphs."""
 
+    def __init__(self, page_name, **kwargs):
+        self.page_name = page_name
+        self.icon_color = MUTED
+        super().__init__(**kwargs)
+        self.bind(pos=self.redraw, size=self.redraw)
+        self.redraw()
+
+    def set_color(self, color):
+        self.icon_color = color
+        self.redraw()
+
+    def redraw(self, *_):
+        self.canvas.clear()
+
+        w = self.width
+        h = self.height
+        if w <= 0 or h <= 0:
+            return
+
+        cx = self.x + w / 2
+        cy = self.y + h / 2
+        s = min(w, h) * 0.72
+
+        x1 = cx - s * 0.38
+        x2 = cx + s * 0.38
+        y1 = cy - s * 0.32
+        y2 = cy + s * 0.32
+
+        with self.canvas:
+            Color(*self.icon_color)
+
+            if self.page_name == "HOME":
+                # House roof and walls
+                Line(
+                    points=[
+                        cx - s * 0.48, cy,
+                        cx, cy + s * 0.43,
+                        cx + s * 0.48, cy,
+                    ],
+                    width=1.5,
+                    cap="round",
+                    joint="round",
+                )
+                Line(
+                    points=[
+                        x1, cy - s * 0.02,
+                        x1, y1,
+                        x2, y1,
+                        x2, cy - s * 0.02,
+                    ],
+                    width=1.5,
+                    cap="round",
+                    joint="round",
+                )
+                Line(
+                    points=[
+                        cx - s * 0.10, y1,
+                        cx - s * 0.10, cy + s * 0.02,
+                        cx + s * 0.10, cy + s * 0.02,
+                        cx + s * 0.10, y1,
+                    ],
+                    width=1.3,
+                    cap="round",
+                    joint="round",
+                )
+
+            elif self.page_name == "MARKETS":
+                # Market chart and trend line
+                Line(
+                    points=[
+                        x1, y1,
+                        x1, y2,
+                        x2, y2,
+                    ],
+                    width=1.4,
+                    cap="round",
+                    joint="round",
+                )
+                Line(
+                    points=[
+                        cx - s * 0.29, cy - s * 0.12,
+                        cx - s * 0.08, cy + s * 0.06,
+                        cx + s * 0.08, cy - s * 0.02,
+                        cx + s * 0.30, cy + s * 0.24,
+                    ],
+                    width=1.8,
+                    cap="round",
+                    joint="round",
+                )
+
+            elif self.page_name == "TRADES":
+                # Trade history: three clean rows
+                for offset, length in [
+                    (s * 0.24, s * 0.48),
+                    (0, s * 0.62),
+                    (-s * 0.24, s * 0.48),
+                ]:
+                    Line(
+                        points=[
+                            cx - length / 2,
+                            cy + offset,
+                            cx + length / 2,
+                            cy + offset,
+                        ],
+                        width=1.7,
+                        cap="round",
+                    )
+                    Ellipse(
+                        pos=(
+                            cx - length / 2 - s * 0.09,
+                            cy + offset - s * 0.035,
+                        ),
+                        size=(s * 0.07, s * 0.07),
+                    )
+
+            elif self.page_name == "ANALYSIS":
+                # Magnifying glass
+                Ellipse(
+                    pos=(
+                        cx - s * 0.34,
+                        cy - s * 0.20,
+                    ),
+                    size=(s * 0.53, s * 0.53),
+                )
+                Line(
+                    points=[
+                        cx + s * 0.10, cy - s * 0.13,
+                        cx + s * 0.39, cy - s * 0.42,
+                    ],
+                    width=2.0,
+                    cap="round",
+                )
+
+            elif self.page_name == "SETTINGS":
+                # Gear-style icon
+                radius = s * 0.28
+                Ellipse(
+                    pos=(
+                        cx - radius,
+                        cy - radius,
+                    ),
+                    size=(radius * 2, radius * 2),
+                )
+                Ellipse(
+                    pos=(
+                        cx - s * 0.09,
+                        cy - s * 0.09,
+                    ),
+                    size=(s * 0.18, s * 0.18),
+                )
+
+                for i in range(8):
+                    angle = 2 * pi * i / 8
+                    inner_r = s * 0.32
+                    outer_r = s * 0.43
+
+                    Line(
+                        points=[
+                            cx + cos(angle) * inner_r,
+                            cy + sin(angle) * inner_r,
+                            cx + cos(angle) * outer_r,
+                            cy + sin(angle) * outer_r,
+                        ],
+                        width=1.8,
+                        cap="round",
+                    )
+
+
+class DashboardUI(BoxLayout):
     def __init__(self, state: AppState, **kwargs):
         super().__init__(
             orientation="vertical",
@@ -190,9 +366,9 @@ class DashboardUI(BoxLayout):
         self._resizing = True
         self.scale = new_scale
 
-        self.navigation.height = self.d(64)
+        self.navigation.height = self.d(68)
         self.navigation.padding = self.d(5)
-        self.navigation.spacing = self.d(3)
+        self.navigation.spacing = self.d(2)
 
         self.navigate(self.current_page)
         self._resizing = False
@@ -224,10 +400,11 @@ class DashboardUI(BoxLayout):
         )
         widget.bind(
             size=lambda instance, value:
-            setattr(instance, "text_size", (
-                max(0, value[0] - self.d(4)),
-                value[1],
-            ))
+            setattr(
+                instance,
+                "text_size",
+                (max(0, value[0] - self.d(4)), value[1]),
+            )
         )
         return widget
 
@@ -319,51 +496,135 @@ class DashboardUI(BoxLayout):
         navigation = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=self.d(64),
-            padding=self.d(5),
-            spacing=self.d(3),
+            height=self.d(68),
+            padding=(self.d(5), self.d(5)),
+            spacing=self.d(2),
+        )
+
+        with navigation.canvas.before:
+            Color(*CARD)
+            navigation.nav_background = RoundedRectangle(
+                pos=navigation.pos,
+                size=navigation.size,
+                radius=[self.d(15)],
+            )
+
+        navigation.bind(
+            pos=lambda instance, value: setattr(
+                navigation.nav_background, "pos", value
+            ),
+            size=lambda instance, value: setattr(
+                navigation.nav_background, "size", value
+            ),
         )
 
         self.nav_buttons = {}
+        self.nav_icons = {}
+        self.nav_indicators = {}
 
         pages = [
-            ("HOME", "⌂\nHOME"),
-            ("MARKETS", "◉\nMARKETS"),
-            ("TRADES", "▤\nTRADES"),
-            ("ANALYSIS", "⌁\nANALYSIS"),
-            ("SETTINGS", "⚙\nSETTINGS"),
+            ("HOME", "HOME"),
+            ("MARKETS", "MARKETS"),
+            ("TRADES", "TRADES"),
+            ("ANALYSIS", "ANALYSIS"),
+            ("SETTINGS", "SETTINGS"),
         ]
 
-        for page_name, text in pages:
-            button = Button(
-                text=text,
-                font_size=self.f(9),
+        for page_name, caption in pages:
+            item = BoxLayout(
+                orientation="vertical",
+                spacing=self.d(1),
+                padding=(self.d(2), self.d(4)),
+            )
+
+            with item.canvas.before:
+                indicator_color = Color(
+                    *(PURPLE if page_name == self.current_page
+                      else CARD)
+                )
+                indicator = RoundedRectangle(
+                    pos=item.pos,
+                    size=item.size,
+                    radius=[self.d(10)],
+                )
+
+            item.bind(
+                pos=lambda instance, value, shape=indicator:
+                setattr(shape, "pos", value),
+                size=lambda instance, value, shape=indicator:
+                setattr(shape, "size", value),
+            )
+
+            icon_widget = NavIcon(
+                page_name,
+                size_hint=(1, 0.62),
+            )
+
+            label_widget = Label(
+                text=caption,
+                size_hint=(1, 0.38),
+                font_size=self.f(8.5),
+                bold=True,
                 color=(
                     PURPLE_LIGHT
                     if page_name == self.current_page
                     else MUTED
                 ),
-                background_normal="",
-                background_down="",
-                background_color=BG,
-                border=(0, 0, 0, 0),
+                halign="center",
+                valign="middle",
             )
-            button.bind(
-                on_release=lambda _, p=page_name: self.navigate(p)
+
+            item.add_widget(icon_widget)
+            item.add_widget(label_widget)
+
+            item.bind(
+                on_touch_down=lambda instance, touch, p=page_name:
+                self._nav_touch(instance, touch, p)
             )
-            navigation.add_widget(button)
-            self.nav_buttons[page_name] = button
+
+            navigation.add_widget(item)
+
+            self.nav_buttons[page_name] = label_widget
+            self.nav_icons[page_name] = icon_widget
+            self.nav_indicators[page_name] = (
+                item,
+                indicator_color,
+                indicator,
+            )
 
         return navigation
 
+    def _nav_touch(self, instance, touch, page_name):
+        if instance.collide_point(*touch.pos):
+            if touch.is_mouse_scrolling:
+                return False
+            if touch.button is None:
+                self.navigate(page_name)
+                return True
+        return False
+
     def refresh_navigation(self):
-        for page_name, button in self.nav_buttons.items():
-            button.color = (
-                PURPLE_LIGHT
-                if page_name == self.current_page
-                else MUTED
+        for page_name, label_widget in self.nav_buttons.items():
+            active = page_name == self.current_page
+
+            label_widget.color = (
+                PURPLE_LIGHT if active else MUTED
             )
-            button.font_size = self.f(9)
+            label_widget.font_size = self.f(8.5)
+
+            self.nav_icons[page_name].set_color(
+                PURPLE_LIGHT if active else MUTED
+            )
+
+            _, indicator_color, indicator = (
+                self.nav_indicators[page_name]
+            )
+
+            indicator_color.rgba = (
+                (PURPLE[0], PURPLE[1], PURPLE[2], 0.28)
+                if active
+                else CARD
+            )
 
     def navigate(self, page):
         self.current_page = page
