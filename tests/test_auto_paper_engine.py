@@ -1,10 +1,4 @@
-"""Unit tests for GARRY V7 AutoPaperEngine safety checks.
-
-Run from repository root:
-    python -m unittest tests.test_auto_paper_engine -v
-
-Uses fake data only; no exchange connection or live orders.
-"""
+"""Corrected AutoPaperEngine safety tests; fake data only."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,10 +22,10 @@ class FakeDeltaClient:
         return {"result": list(self.rows)}
 
 
-def candle(timestamp, open_=100.0, high=102.0, low=99.0,
-           close=101.0, volume=10.0):
-    return {"time": timestamp, "open": open_, "high": high, "low": low,
-            "close": close, "volume": volume}
+def candle(timestamp, close=100.0, volume=10.0):
+    # Consistent OHLC: low <= open/close <= high.
+    return {"time": timestamp, "open": close, "high": close + 1.0,
+            "low": close - 1.0, "close": close, "volume": volume}
 
 
 class AutoPaperEngineSafetyTests(unittest.TestCase):
@@ -77,7 +71,8 @@ class AutoPaperEngineSafetyTests(unittest.TestCase):
 
     def test_malformed_ohlc_rows_are_ignored(self):
         rows = self.fresh_rows()
-        rows.append(candle(int(self.now - 10), open_=100, high=90, low=95, close=96))
+        rows.append({"time": int(self.now - 10), "open": 100, "high": 90,
+                     "low": 95, "close": 96, "volume": 10})
         engine, _ = self.make_engine(rows=rows)
         candles = engine._load_candles()
         self.assertTrue(all(item.high >= item.low for item in candles))
@@ -122,4 +117,4 @@ class AutoPaperEngineSafetyTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)
