@@ -1,125 +1,121 @@
-"""Unit tests for GARRY V7 AutoPaperEngine safety checks.
+"""Unit tests for GARRY V7 paper trading."""
 
-Run from repository root:
-    python -m unittest tests.test_auto_paper_engine -v
-
-Uses fake data only; no exchange connection or live orders.
-"""
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from datetime import datetime, timezone
 
-from data.delta_public import DeltaAPIError
-from strategy.auto_paper_engine import AutoPaperEngine
-
-
-class FakeDeltaClient:
-    def __init__(self, rows=None, error=None):
-        self.rows = list(rows or [])
-        self.error = error
-        self.calls = []
-
-    def get_candles(self, symbol, resolution, start=None, end=None):
-        self.calls.append({"symbol": symbol, "resolution": resolution,
-                           "start": start, "end": end})
-        if self.error is not None:
-            raise self.error
-        return {"result": list(self.rows)}
+from strategy.paper_trading import (
+    PaperTrader,
+    PaperTradingError,
+    DEFAULT_TP_POINTS,
+    DEFAULT_SL_POINTS,
+    MAX_TRADES_PER_DAY,
+)
 
 
-def candle(timestamp, open_=100.0, high=102.0, low=99.0,
-           close=101.0, volume=10.0):
-    return {"time": timestamp, "open": open_, "high": high, "low": low,
-            "close": close, "volume": volume}
-
-
-class AutoPaperEngineSafetyTests(unittest.TestCase):
+class TestPaperTrading(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_dir.cleanup)
-        self.now = 1_800_000_000.0
-
-    def make_engine(self, rows=None, error=None, resolution="5m"):
-        client = FakeDeltaClient(rows=rows, error=error)
-        ledger = str(Path(self.temp_dir.name) / "paper_trades.json")
-        engine = AutoPaperEngine(
-            symbol="BTCUSD", resolution=resolution, quantity=1.0,
-            ledger_path=ledger, starting_balance=5000.0,
-            client=client, clock=lambda: self.now,
+        self.ledger = str(Path(self.temp_dir.name) / "paper_trades.json")
+        self.trader = PaperTrader(
+            ledger_path=self.ledger,
+            starting_balance=5000.0,
         )
-        return engine, client
 
-    def fresh_rows(self, count=12, interval=300, latest_age=30):
-        latest = int(self.now - latest_age)
-        first = latest - interval * (count - 1)
-        return [candle(first + i * interval, close=100.0 + i)
-                for i in range(count)]
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
-    def test_fresh_valid_candles_are_accepted(self):
-        rows = self.fresh_rows()
-        engine, client = self.make_engine(rows=rows)
-        candles = engine._load_candles()
-        self.assertEqual(len(candles), len(rows))
-        self.assertEqual(candles[-1].close, rows[-1]["close"])
-        self.assertEqual(client.calls[0]["symbol"], "BTCUSD")
-        self.assertEqual(client.calls[0]["resolution"], "5m")
+    def test_final_limits_and_paper_only_mode(self):
+        self.assertEqual(MAX_TRADES_PER_DAY, 4)
+        self.assertEqual(DEFAULT_TP_POINTS, 20.0)
+        self.assertEqual(DEFAULT_SL_POINTS, 15.0)
+        self.assertFalse(self.trader.summary()["live_orders_enabled"])
 
-    def test_stale_latest_candle_is_rejected(self):
-        engine, _ = self.make_engine(rows=self.fresh_rows(latest_age=601))
-        with self.assertRaisesRegex(DeltaAPIError, "Stale candle data rejected"):
-            engine._load_candles()
+    def test_buy_take_profit(self):
+        trade = self.trader.open_position("BTCUSD", "BUY", 100.0, 1.0)
 
-    def test_future_dated_latest_candle_is_rejected(self):
-        engine, _ = self.make_engine(rows=self.fresh_rows(latest_age=-120))
-        with self.assertRaisesRegex(DeltaAPIError, "Future-dated candle data rejected"):
-            engine._load_candles()
+        self.assertEqual(trade["stop_loss"], 85.0)
+        self.assertEqual(trade["take_profit"], 120.0)
 
-    def test_malformed_ohlc_rows_are_ignored(self):
-        rows = self.fresh_rows()
-        rows.append(candle(int(self.now - 10), open_=100, high=90, low=95, close=96))
-        engine, _ = self.make_engine(rows=rows)
-        candles = engine._load_candles()
-        self.assertTrue(all(item.high >= item.low for item in candles))
-        self.assertEqual(len(candles), 12)
+        closed = self.trader.process_candle("BTCUSD", high=120.0, low=101.0)
 
-    def test_duplicate_timestamps_are_deduplicated(self):
-        rows = self.fresh_rows()
-        rows.append(dict(rows[-1]))
-        engine, _ = self.make_engine(rows=rows)
-        self.assertEqual(len(engine._load_candles()), 12)
+        self.assertEqual(closed["status"], "CLOSED")
+        self.assertEqual(closed["close_reason"], "TAKE_PROFIT")
+        self.assertEqual(closed["pnl"], 20.0)
 
-    def test_too_few_valid_candles_are_rejected(self):
-        engine, _ = self.make_engine(rows=self.fresh_rows(count=9))
-        with self.assertRaisesRegex(DeltaAPIError, "Not enough valid candles"):
-            engine._load_candles()
+    def test_sell_take_profit(self):
+        trade = self.trader.open_position("BTCUSD", "SELL", 100.0, 1.0)
 
-    def test_api_errors_propagate_without_fabricated_data(self):
-        engine, _ = self.make_engine(
-            error=DeltaAPIError("NETWORK ERROR: test timeout"))
-        with self.assertRaisesRegex(DeltaAPIError, "NETWORK ERROR"):
-            engine._load_candles()
+        self.assertEqual(trade["stop_loss"], 115.0)
+        self.assertEqual(trade["take_profit"], 80.0)
 
-    def test_invalid_resolution_is_rejected_at_initialization(self):
-        with self.assertRaisesRegex(ValueError, "Unsupported candle resolution"):
-            self.make_engine(resolution="7m")
+        closed = self.trader.process_candle("BTCUSD", high=99.0, low=80.0)
 
-    def test_millisecond_timestamps_are_supported(self):
-        rows = self.fresh_rows()
-        for row in rows:
-            row["time"] = int(row["time"]) * 1000
-        engine, _ = self.make_engine(rows=rows)
-        self.assertEqual(len(engine._load_candles()), 12)
+        self.assertEqual(closed["close_reason"], "TAKE_PROFIT")
+        self.assertEqual(closed["pnl"], 20.0)
 
-    def test_iso_timestamps_are_supported(self):
-        rows = self.fresh_rows()
-        for row in rows:
-            row["time"] = datetime.fromtimestamp(
-                row["time"], timezone.utc
-            ).isoformat().replace("+00:00", "Z")
-        engine, _ = self.make_engine(rows=rows)
-        self.assertEqual(len(engine._load_candles()), 12)
+    def test_buy_stop_loss(self):
+        self.trader.open_position("BTCUSD", "BUY", 100.0, 1.0)
+
+        closed = self.trader.process_candle("BTCUSD", high=105.0, low=85.0)
+
+        self.assertEqual(closed["close_reason"], "STOP_LOSS")
+        self.assertEqual(closed["pnl"], -15.0)
+
+    def test_stop_loss_wins_if_both_levels_touched(self):
+        self.trader.open_position("BTCUSD", "BUY", 100.0, 1.0)
+
+        closed = self.trader.process_candle("BTCUSD", high=120.0, low=85.0)
+
+        self.assertEqual(closed["close_reason"], "STOP_LOSS")
+        self.assertEqual(closed["pnl"], -15.0)
+
+    def test_only_one_open_position(self):
+        self.trader.open_position("BTCUSD", "BUY", 100.0, 1.0)
+
+        with self.assertRaises(PaperTradingError):
+            self.trader.open_position("ETHUSD", "BUY", 100.0, 1.0)
+
+    def test_invalid_side_rejected(self):
+        with self.assertRaises(PaperTradingError):
+            self.trader.open_position("BTCUSD", "HOLD", 100.0, 1.0)
+
+    def test_invalid_entry_rejected(self):
+        with self.assertRaises(PaperTradingError):
+            self.trader.open_position("BTCUSD", "BUY", 0.0, 1.0)
+
+    def test_ledger_persists_after_reload(self):
+        self.trader.open_position("BTCUSD", "BUY", 100.0, 1.0)
+
+        reloaded = PaperTrader(
+            ledger_path=self.ledger,
+            starting_balance=5000.0,
+        )
+
+        self.assertEqual(len(reloaded.trades), 1)
+        self.assertEqual(reloaded.trades[0]["symbol"], "BTCUSD")
+        self.assertEqual(reloaded.trades[0]["status"], "OPEN")
+
+        with open(self.ledger, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        self.assertEqual(data["mode"], "PAPER_ONLY")
+        self.assertFalse(data["live_orders_enabled"])
+
+    def test_summary_after_closed_trade(self):
+        self.trader.open_position("BTCUSD", "BUY", 100.0, 2.0)
+        self.trader.process_candle("BTCUSD", high=120.0, low=101.0)
+
+        summary = self.trader.summary()
+
+        self.assertEqual(summary["closed_trades"], 1)
+        self.assertEqual(summary["wins"], 1)
+        self.assertEqual(summary["losses"], 0)
+        self.assertEqual(summary["realized_pnl"], 40.0)
+        self.assertEqual(summary["equity"], 5040.0)
+        self.assertFalse(summary["live_orders_enabled"])
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)
