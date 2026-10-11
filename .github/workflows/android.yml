@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   test-and-build:
-    name: Test Paper Trading and Build APK
+    name: Validate Source and Build Debug APK
     runs-on: ubuntu-22.04
     timeout-minutes: 120
 
@@ -19,167 +19,119 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     steps:
-      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Python
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      # 3. Verify Python and repository files
-      - name: Verify project files
+      - name: Verify required project files
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           python --version
           test -f main.py
+          test -f app/ui.py
+          test -f app/login.py
+          test -f app/state.py
+          test -f data/market_feed.py
+          test -f data/delta_public.py
           test -f buildozer.spec
-          test -f strategy/paper_trading.py
-          test -f strategy/risk.py
-          test -f tests/test_paper_trading.py
-          echo "Required project files found."
+          test -f requirements.txt
+          echo "Required application files found."
 
-      # 4. Run Paper Trading unit tests BEFORE building
-      - name: Run Paper Trading Unit Tests
+      - name: Check Python syntax
         shell: bash
         run: |
-          set -e
-          python -m unittest discover \
-            -s tests \
-            -p "test_*.py" \
-            -v
+          set -euo pipefail
+          python -m compileall -q main.py app data strategy
+          echo "Python syntax check passed."
 
-      # 5. Setup Java
+      - name: Run existing unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p "test_*.py" -v
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # 6. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: "platform-tools"
 
-      # 7. Install Android SDK components
       - name: Install Android SDK components
         shell: bash
         run: |
-          set -e
-
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-
           sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_API_LEVEL}" \
             "build-tools;${BUILD_TOOLS_VERSION}" \
             "ndk;${ANDROID_NDK_VERSION}"
 
-      # 8. Verify build environment
-      - name: Verify build environment
+      - name: Verify Android build environment
         shell: bash
         run: |
-          set -e
-
-          echo "========== PYTHON =========="
-          python --version
-
-          echo "========== JAVA =========="
+          set -euo pipefail
           java -version
-
-          echo "========== SDKMANAGER =========="
           command -v sdkmanager
           sdkmanager --version
-
-          echo "========== ANDROID COMPONENTS =========="
           test -d "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
           test -d "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
           test -d "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}"
-
           echo "Android SDK components verified."
 
-      # 9. Install Buildozer dependencies
       - name: Install Buildozer dependencies
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install buildozer==1.6.0 cython==0.29.34 virtualenv
 
-          python -m pip install --upgrade \
-            pip setuptools wheel
-
-          python -m pip install \
-            buildozer==1.6.0 \
-            cython==0.29.34 \
-            virtualenv
-
-      # 10. Verify Buildozer
       - name: Verify Buildozer
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           buildozer --version
           cython --version
 
-      # 11. Clean previous build output
-      - name: Clean build output
+      - name: Clean previous build output
         shell: bash
         run: |
-          set -e
-          rm -rf .buildozer
-          rm -rf bin
-          echo "Build output cleaned."
+          set -euo pipefail
+          rm -rf .buildozer bin
 
-      # 12. Show build configuration
       - name: Show build configuration
         shell: bash
         run: |
-          set -e
-          echo "========== BUILDOZER CONFIG =========="
+          set -euo pipefail
           cat buildozer.spec
-
           echo "========== REQUIREMENTS =========="
-          if [ -f requirements.txt ]; then
-            cat requirements.txt
-          fi
+          cat requirements.txt
 
-      # 13. Build Android debug APK
       - name: Build Android debug APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           buildozer -v android debug
 
-      # 14. Verify APK exists
-      - name: Verify APK
+      - name: Verify APK exists
         shell: bash
         run: |
-          set -e
-
-          echo "========== APK OUTPUT =========="
+          set -euo pipefail
+          test -d bin
           ls -lah bin
+          find bin -maxdepth 1 -type f -name "*.apk" -print -quit | grep -q .
 
-          APK_COUNT=$(find bin \
-            -maxdepth 1 \
-            -type f \
-            -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -lt 1 ]; then
-            echo "ERROR: No APK generated."
-            exit 1
-          fi
-
-          find bin \
-            -maxdepth 1 \
-            -type f \
-            -name "*.apk" \
-            -print
-
-      # 15. Upload APK artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
