@@ -3,18 +3,19 @@
 GARRY V7 — Delta Exchange India public market feed.
 
 Features:
-- Compatible with app.ui.DashboardUI.
-- REST polling for all approved symbols, using independent workers.
-- Optional compact ticker-message parsing.
+- REST polling for approved symbols.
 - Thread-safe snapshots and callbacks.
-- Honest OFFLINE / ERROR / STALE states.
-- No API credentials and no real order placement.
+- Independent stop event for each feed generation.
+- Bounded exponential retry after request failures.
+- Freshness tracking and honest OFFLINE / STALE states.
+- No API credentials and no order placement.
 """
 
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from data.delta_public import (
@@ -28,6 +29,8 @@ logger = logging.getLogger("garry_v7.market_feed")
 POLL_INTERVAL_SECONDS = 5.0
 REQUEST_TIMEOUT_SECONDS = 5
 STALE_AFTER_SECONDS = 20.0
+RETRY_INITIAL_SECONDS = 2.0
+RETRY_MAX_SECONDS = 30.0
 
 
 @dataclass
@@ -49,11 +52,18 @@ class MarketSnapshot:
 
     @property
     def is_stale(self):
-        if self.updated_at <= 0:
-            return True
-        return time.time() - self.updated_at > STALE_AFTER_SECONDS
+        return (
+            self.updated_at <= 0
+            or time.time() - self.updated_at > STALE_AFTER_SECONDS
+        )
 
     def as_dict(self):
+        stale = self.is_stale
+        status = "STALE" if stale and self.last_price is not None else self.status
+
+        if self.last_price is None:
+            status = "OFFLINE" if self.status != "ERROR" else "ERROR"
+
         return {
             "symbol": self.symbol,
             "last_price": self.last_price,
@@ -61,22 +71,17 @@ class MarketSnapshot:
             "bid": self.bid,
             "ask": self.ask,
             "volume": self.volume,
-            "status": "STALE" if self.is_stale else self.status,
+            "status": status,
             "source": self.source,
             "error": self.error,
             "updated_at": self.updated_at,
             "updated_utc": self.updated_utc,
-            "is_stale": self.is_stale,
+            "is_stale": stale,
         }
 
 
 class DeltaMarketFeed:
-    """
-    Public market feed with one polling worker per approved symbol.
-
-    UI callbacks receive a MarketSnapshot object. The implementation
-    never marks an invalid or missing price as live.
-    """
+    """Public REST market feed with thread-safe snapshot delivery."""
 
     def __init__(
         self,
@@ -86,6 +91,7 @@ class DeltaMarketFeed:
         client=None,
     ):
         requested = symbols or APPROVED_SYMBOLS
+
         self.symbols = tuple(
             str(symbol).upper().strip()
             for symbol in requested
@@ -99,7 +105,7 @@ class DeltaMarketFeed:
         self.request_timeout = max(1.0, float(request_timeout))
 
         self.client = client or DeltaPublicClient(
-            timeout=int(self.request_timeout)
+            timeout=max(1, int(self.request_timeout))
         )
 
         self._lock = threading.RLock()
@@ -108,6 +114,9 @@ class DeltaMarketFeed:
             symbol: MarketSnapshot(symbol=symbol)
             for symbol in self.symbols
         }
+
+        # Each run gets its own event. An old worker can never wait on
+        # a newly cleared event after a retry/restart.
         self._stop_event = threading.Event()
         self._workers = {}
         self._running = False
@@ -138,9 +147,7 @@ class DeltaMarketFeed:
 
         with self._lock:
             snapshot = self._snapshots.get(symbol)
-            if snapshot is None:
-                return None
-            return self._copy_snapshot(snapshot)
+            return self._copy_snapshot(snapshot) if snapshot else None
 
     def get_all_snapshots(self):
         with self._lock:
@@ -165,7 +172,7 @@ class DeltaMarketFeed:
         )
 
     def start(self, *_):
-        """Start once; return immediately without blocking the UI."""
+        """Start one worker per approved symbol without blocking the UI."""
         with self._lock:
             if self._running:
                 return
@@ -173,13 +180,16 @@ class DeltaMarketFeed:
             self._running = True
             self._generation += 1
             generation = self._generation
-            self._stop_event.clear()
+
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+            self._workers = {}
 
             for symbol in self.symbols:
                 worker = threading.Thread(
                     target=self._poll_symbol,
-                    args=(symbol, generation),
-                    name=f"GarryMarket-{symbol}",
+                    args=(symbol, generation, stop_event),
+                    name=f"GarryMarket-{symbol}-{generation}",
                     daemon=True,
                 )
                 self._workers[symbol] = worker
@@ -191,31 +201,42 @@ class DeltaMarketFeed:
         )
 
     def stop(self, *_):
-        """Request shutdown without waiting on network calls."""
+        """Signal all workers in the current generation to stop."""
         with self._lock:
             if not self._running:
                 return
 
             self._running = False
             self._generation += 1
-            self._stop_event.set()
-            self._workers.clear()
+            stop_event = self._stop_event
+            stop_event.set()
+            self._workers = {}
 
         logger.info("Market feed stop requested.")
 
-    def _is_current_generation(self, generation):
+    def _is_current_generation(self, generation, stop_event):
         with self._lock:
             return (
                 self._running
                 and self._generation == generation
-                and not self._stop_event.is_set()
+                and self._stop_event is stop_event
+                and not stop_event.is_set()
             )
 
-    def _poll_symbol(self, symbol, generation):
-        while self._is_current_generation(generation):
+    def _poll_symbol(self, symbol, generation, stop_event):
+        failures = 0
+
+        while self._is_current_generation(generation, stop_event):
             try:
                 payload = self.client.get_ticker(symbol)
                 ticker = self._extract_ticker(payload, symbol)
+
+                returned_symbol = ticker.get("symbol", ticker.get("s"))
+                if returned_symbol:
+                    if str(returned_symbol).upper().strip() != symbol:
+                        raise DeltaAPIError(
+                            f"Ticker symbol mismatch for {symbol}."
+                        )
 
                 price = self._positive_number(
                     ticker,
@@ -236,16 +257,13 @@ class DeltaMarketFeed:
                     )
 
                 bid = self._positive_number(
-                    ticker,
-                    ("best_bid", "bid", "buy", "bp"),
+                    ticker, ("best_bid", "bid", "buy", "bp")
                 )
                 ask = self._positive_number(
-                    ticker,
-                    ("best_ask", "ask", "sell", "ap"),
+                    ticker, ("best_ask", "ask", "sell", "ap")
                 )
                 volume = self._positive_number(
-                    ticker,
-                    ("volume", "volume_24h", "v"),
+                    ticker, ("volume", "volume_24h", "v")
                 )
 
                 quotes = ticker.get("quotes")
@@ -257,6 +275,9 @@ class DeltaMarketFeed:
                         quotes, ("best_ask", "ask", "sell")
                     )
 
+                if not self._is_current_generation(generation, stop_event):
+                    break
+
                 self._update_market_snapshot(
                     symbol=symbol,
                     price=price,
@@ -265,30 +286,43 @@ class DeltaMarketFeed:
                     volume=volume,
                     source="REST",
                     generation=generation,
+                    stop_event=stop_event,
                 )
 
-            except Exception as exc:
-                if self._is_current_generation(generation):
-                    logger.warning(
-                        "Ticker request failed for %s: %s: %s",
-                        symbol,
-                        type(exc).__name__,
-                        exc,
-                    )
-                    self._set_error(
-                        symbol,
-                        f"{type(exc).__name__}: {exc}",
-                        generation,
-                    )
+                failures = 0
+                delay = self.poll_interval
 
-            self._stop_event.wait(self.poll_interval)
+            except Exception as exc:
+                if not self._is_current_generation(generation, stop_event):
+                    break
+
+                failures += 1
+                delay = min(
+                    RETRY_MAX_SECONDS,
+                    RETRY_INITIAL_SECONDS
+                    * (2 ** min(failures - 1, 4)),
+                )
+
+                logger.warning(
+                    "Ticker request failed for %s (%s): %s",
+                    symbol,
+                    type(exc).__name__,
+                    str(exc)[:250],
+                )
+
+                self._set_error(
+                    symbol,
+                    f"{type(exc).__name__}: {str(exc)[:250]}",
+                    generation=generation,
+                    stop_event=stop_event,
+                )
+
+            if stop_event.wait(delay):
+                break
 
     @staticmethod
     def _extract_ticker(payload, requested_symbol):
-        """
-        Delta REST commonly returns:
-        {"success": true, "result": {"symbol": "...", "close": "..."}}
-        """
+        """Extract a ticker from Delta REST response formats."""
         if not isinstance(payload, dict):
             raise DeltaAPIError("Invalid ticker response type.")
 
@@ -304,7 +338,7 @@ class DeltaMarketFeed:
                     if isinstance(item, dict)
                     and str(
                         item.get("symbol", item.get("s", ""))
-                    ).upper() == requested_symbol
+                    ).upper().strip() == requested_symbol
                 ),
                 None,
             )
@@ -312,7 +346,6 @@ class DeltaMarketFeed:
         if not isinstance(result, dict):
             raise DeltaAPIError("Ticker response has no result object.")
 
-        # Some WebSocket messages wrap ticker details in "d".
         nested = result.get("d")
         if isinstance(nested, dict):
             result = {**result, **nested}
@@ -341,7 +374,6 @@ class DeltaMarketFeed:
 
     @staticmethod
     def _utc_now():
-        from datetime import datetime, timezone
         return datetime.now(timezone.utc).isoformat()
 
     def _update_market_snapshot(
@@ -353,6 +385,7 @@ class DeltaMarketFeed:
         volume=None,
         source="REST",
         generation=None,
+        stop_event=None,
     ):
         try:
             price = float(price)
@@ -370,6 +403,8 @@ class DeltaMarketFeed:
                 if (
                     not self._running
                     or generation != self._generation
+                    or stop_event is not self._stop_event
+                    or stop_event.is_set()
                 ):
                     return
 
@@ -389,7 +424,13 @@ class DeltaMarketFeed:
 
         self._notify_callbacks(callbacks, published)
 
-    def _set_error(self, symbol, message, generation=None):
+    def _set_error(
+        self,
+        symbol,
+        message,
+        generation=None,
+        stop_event=None,
+    ):
         with self._lock:
             if symbol not in self._snapshots:
                 return
@@ -398,17 +439,22 @@ class DeltaMarketFeed:
                 if (
                     not self._running
                     or generation != self._generation
+                    or stop_event is not self._stop_event
+                    or stop_event.is_set()
                 ):
                     return
 
             snapshot = self._snapshots[symbol]
             snapshot.error = str(message)[:500]
 
-            # Keep the last real price for diagnostics, but mark it stale
-            # after the freshness threshold; never replace it with zero.
-            snapshot.status = (
-                "STALE" if snapshot.last_price is not None else "OFFLINE"
-            )
+            if snapshot.last_price is None:
+                snapshot.status = "ERROR"
+            else:
+                snapshot.status = (
+                    "STALE"
+                    if time.time() - snapshot.updated_at > STALE_AFTER_SECONDS
+                    else "CONNECTED"
+                )
 
             published = self._copy_snapshot(snapshot)
             callbacks = list(self._callbacks)
@@ -451,8 +497,8 @@ class DeltaMarketFeed:
 
     def _handle_ticker_message(self, payload: dict) -> None:
         """
-        Parse standard and compact ticker messages for compatibility.
-        REST remains the active fallback feed.
+        Parse ticker messages for compatibility.
+        REST polling remains the active feed.
         """
         if not isinstance(payload, dict):
             return
@@ -476,15 +522,15 @@ class DeltaMarketFeed:
             if not isinstance(item, dict):
                 continue
 
+            nested = item.get("d")
+            if isinstance(nested, dict):
+                item = {**item, **nested}
+
             symbol = self._extract_symbol(item)
             if not symbol:
                 symbol = self._extract_symbol(payload)
             if not symbol:
                 continue
-
-            nested = item.get("d")
-            if isinstance(nested, dict):
-                item = {**item, **nested}
 
             price = self._first_positive(
                 item,
@@ -526,10 +572,9 @@ class DeltaMarketFeed:
                 ask = ask or self._first_positive(
                     quotes, ("best_ask", "ask", "sell")
                 )
-            elif isinstance(quotes, (list, tuple)):
-                if len(quotes) >= 2:
-                    bid = bid or self._to_float(quotes[0])
-                    ask = ask or self._to_float(quotes[1])
+            elif isinstance(quotes, (list, tuple)) and len(quotes) >= 2:
+                bid = bid or self._to_float(quotes[0])
+                ask = ask or self._to_float(quotes[1])
 
             if price:
                 self._update_market_snapshot(
@@ -540,3 +585,4 @@ class DeltaMarketFeed:
                     volume=volume,
                     source="WEBSOCKET",
                 )
+l
