@@ -5,11 +5,11 @@ package.domain = com.garry.v7
 
 source.dir =.
 source.include_exts = py,png,jpg,kv,atlas,json
-source.exclude_exts = spec,md,yml,yaml
+source.exclude_exts = spec,md,yml,yaml,gitignore
 
 version = 0.1
 
-requirements = python3,kivy==2.3.0,kivymd,pillow,requests,certifi,urllib3
+requirements = python3,kivy==2.3.1,kivymd==1.1.1,pillow,requests,certifi,urllib3
 
 orientation = portrait
 fullscreen = 0
@@ -20,10 +20,11 @@ android.minapi = 21
 android.ndk = 25b
 android.sdk_path = /usr/local/lib/android/sdk
 android.accept_sdk_license_agreement = True
+android.arch = arm64-v8a
 
+p4a.branch = develop
 p4a.bootstrap = sdl2
-p4a.branch = master
 
 [buildozer]
-log_level = 2
+log_level = 1
 warn_on_root = 1
