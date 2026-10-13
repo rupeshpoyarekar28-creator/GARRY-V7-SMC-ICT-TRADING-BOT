@@ -1,5 +1,6 @@
 
-"""GARRY V7 — complete dashboard UI.
+"""
+GARRY V7 — complete dashboard UI.
 Public market data only. Live orders and Paper Trading remain disabled.
 """
 
@@ -172,6 +173,11 @@ class DashboardUI(BoxLayout):
         self.market_error = ""
         self._market_feed_started = False
         self._retry_pending = False
+        self._retry_waiting_for_fresh_data = False
+
+        # Each feed gets a unique generation token.
+        self._feed_epoch = 0
+        self._feed_callback = None
         self._last_refresh = 0.0
         self.market_feed = None
 
@@ -204,12 +210,25 @@ class DashboardUI(BoxLayout):
     # ------------------------- MARKET FEED -------------------------
 
     def _create_feed(self):
+        """Create a feed with a callback tied to its generation."""
         try:
-            self.market_feed = DeltaMarketFeed()
-            self.market_feed.add_callback(self._on_market_snapshot)
+            self._feed_epoch += 1
+            epoch = self._feed_epoch
+
+            feed = DeltaMarketFeed()
+
+            def feed_callback(snapshot, token=epoch):
+                self._on_market_snapshot(snapshot, token)
+
+            feed.add_callback(feed_callback)
+
+            self.market_feed = feed
+            self._feed_callback = feed_callback
             self.market_error = ""
+
         except Exception as exc:
             self.market_feed = None
+            self._feed_callback = None
             self.market_error = (
                 f"Feed initialization failed: {type(exc).__name__}"
             )
@@ -227,7 +246,11 @@ class DashboardUI(BoxLayout):
 
             self.market_feed.start()
             self._market_feed_started = True
-            self.market_error = "Connecting to public market data..."
+
+            if not self._retry_waiting_for_fresh_data:
+                self.market_error = (
+                    "Connecting to public market data..."
+                )
 
         except Exception as exc:
             self._market_feed_started = False
@@ -249,19 +272,25 @@ class DashboardUI(BoxLayout):
         self._market_feed_started = False
 
     def retry_market_feed(self, *_):
-        """Show immediate feedback and schedule a non-blocking restart."""
+        """Restart the public feed without blocking the Kivy UI."""
         if self._retry_pending:
             self.market_error = "Retry already in progress..."
             self._refresh_market_page()
             return
 
         self._retry_pending = True
-        self.market_error = "Retry requested — reconnecting..."
+        self._retry_waiting_for_fresh_data = True
+        self.market_error = (
+            "Retry requested — waiting for a fresh public ticker..."
+        )
         self._refresh_market_page()
 
         try:
+            # Invalidate queued callbacks from the old feed immediately.
+            self._feed_epoch += 1
             self.stop_market_feed()
             Clock.schedule_once(self._restart_market_feed, 0.2)
+
         except Exception as exc:
             self._retry_pending = False
             self.market_error = (
@@ -271,26 +300,37 @@ class DashboardUI(BoxLayout):
 
     def _restart_market_feed(self, _dt):
         try:
-            # Create a fresh feed to avoid reusing stopped worker state.
             old_feed = self.market_feed
+            old_callback = self._feed_callback
+
             if old_feed is not None:
                 try:
-                    old_feed.remove_callback(self._on_market_snapshot)
+                    if old_callback is not None:
+                        old_feed.remove_callback(old_callback)
+                except Exception:
+                    pass
+
+                try:
+                    old_feed.stop()
                 except Exception:
                     pass
 
             self.market_feed = None
+            self._feed_callback = None
             self._create_feed()
             self._market_feed_started = False
 
             if self.market_feed is None:
-                raise RuntimeError("Could not initialize a fresh feed")
+                raise RuntimeError(
+                    "Could not initialize a fresh feed"
+                )
 
             self.start_market_feed()
 
             if self._market_feed_started:
+                self._retry_waiting_for_fresh_data = True
                 self.market_error = (
-                    "Reconnected; waiting for fresh ticker data..."
+                    "Feed started; waiting for a successful fresh ticker..."
                 )
 
         except Exception as exc:
@@ -303,19 +343,47 @@ class DashboardUI(BoxLayout):
             self._retry_pending = False
             self._refresh_market_page()
 
-    def _on_market_snapshot(self, snapshot):
-        # Feed workers must not modify Kivy widgets directly.
+    def _on_market_snapshot(self, snapshot, feed_epoch=None):
+        """Move worker callbacks onto Kivy's UI thread."""
+        epoch = (
+            self._feed_epoch
+            if feed_epoch is None
+            else feed_epoch
+        )
+
+        if epoch != self._feed_epoch:
+            return
+
         Clock.schedule_once(
-            lambda dt, item=snapshot: self._apply_snapshot(item),
+            lambda dt, item=snapshot, token=epoch:
+                self._apply_snapshot(item, token),
             0,
         )
 
-    def _apply_snapshot(self, snapshot):
+    def _apply_snapshot(self, snapshot, feed_epoch=None):
+        """Apply only snapshots belonging to the current feed."""
+        epoch = (
+            self._feed_epoch
+            if feed_epoch is None
+            else feed_epoch
+        )
+
+        if epoch != self._feed_epoch:
+            return
+
         symbol = getattr(snapshot, "symbol", None)
         if symbol not in APPROVED_SYMBOLS:
             return
 
         self.market_snapshots[symbol] = snapshot
+        status = self._snapshot_status(snapshot)
+
+        # Only a fresh, valid ticker clears the recovery message.
+        if self._retry_waiting_for_fresh_data and status == "LIVE":
+            self._retry_waiting_for_fresh_data = False
+            self.market_error = (
+                f"Public feed recovered: fresh ticker received for {symbol}."
+            )
 
         if symbol == self.state.symbol:
             price = getattr(snapshot, "last_price", None)
@@ -324,9 +392,8 @@ class DashboardUI(BoxLayout):
                 if price is not None and float(price) > 0:
                     self.state.price = float(price)
 
-                self.state.connection_status = self._snapshot_status(
-                    snapshot
-                )
+                self.state.connection_status = status
+
             except (ValueError, TypeError, AttributeError):
                 self.state.connection_status = "ERROR"
 
@@ -365,7 +432,10 @@ class DashboardUI(BoxLayout):
     def _price(self, symbol):
         snapshot = self.market_snapshots.get(symbol)
 
-        if snapshot is None or self._snapshot_status(snapshot) != "LIVE":
+        if snapshot is None:
+            return None
+
+        if self._snapshot_status(snapshot) != "LIVE":
             return None
 
         value = getattr(snapshot, "last_price", None)
@@ -438,6 +508,7 @@ class DashboardUI(BoxLayout):
             valign="middle",
             shorten=False,
         )
+
         widget.bind(
             size=lambda item, value: setattr(
                 item,
@@ -508,6 +579,7 @@ class DashboardUI(BoxLayout):
             height=self.d(68 if subtitle else 48),
             spacing=self.d(2),
         )
+
         header.add_widget(
             self.label(title, 23, True, WHITE, "center")
         )
@@ -533,7 +605,8 @@ class DashboardUI(BoxLayout):
             valign="middle",
         )
         msg.bind(
-            size=lambda widget, size: setattr(widget, "text_size", size)
+            size=lambda widget, size:
+                setattr(widget, "text_size", size)
         )
         content.add_widget(msg)
 
@@ -577,12 +650,10 @@ class DashboardUI(BoxLayout):
             )
 
         nav.bind(
-            pos=lambda _, value: setattr(
-                nav.nav_background, "pos", value
-            ),
-            size=lambda _, value: setattr(
-                nav.nav_background, "size", value
-            ),
+            pos=lambda _, value:
+                setattr(nav.nav_background, "pos", value),
+            size=lambda _, value:
+                setattr(nav.nav_background, "size", value),
         )
 
         self.nav_buttons = {}
@@ -601,7 +672,9 @@ class DashboardUI(BoxLayout):
             )
 
             with item.canvas.before:
-                color = Color(*(BLUE if name == self.current_page else CARD))
+                color = Color(
+                    *(BLUE if name == self.current_page else CARD)
+                )
                 shape = RoundedRectangle(
                     pos=item.pos,
                     size=item.size,
@@ -609,8 +682,10 @@ class DashboardUI(BoxLayout):
                 )
 
             item.bind(
-                pos=lambda _, value, s=shape: setattr(s, "pos", value),
-                size=lambda _, value, s=shape: setattr(s, "size", value),
+                pos=lambda _, value, s=shape:
+                    setattr(s, "pos", value),
+                size=lambda _, value, s=shape:
+                    setattr(s, "size", value),
             )
 
             icon = NavIcon(name, size_hint=(1, 0.62))
@@ -676,6 +751,7 @@ class DashboardUI(BoxLayout):
         self.state.connection_status = self._snapshot_status(
             self.market_snapshots.get(value)
         )
+
         self.show_home()
         self.refresh_navigation()
 
@@ -694,7 +770,9 @@ class DashboardUI(BoxLayout):
 
         card = self.make_card(height=78)
         left = BoxLayout(orientation="vertical")
-        left.add_widget(self.label("PUBLIC MARKET DATA", 10, True, MUTED))
+        left.add_widget(
+            self.label("PUBLIC MARKET DATA", 10, True, MUTED)
+        )
         left.add_widget(
             self.label(
                 status, 17, True,
@@ -703,13 +781,20 @@ class DashboardUI(BoxLayout):
         )
         card.add_widget(left)
         card.add_widget(
-            self.label("LIVE ORDERS DISABLED", 10, True, BLUE_LIGHT, "right")
+            self.label(
+                "LIVE ORDERS DISABLED", 10, True, BLUE_LIGHT, "right"
+            )
         )
         box.add_widget(card)
 
         if self.market_error:
+            message_color = (
+                GREEN
+                if self.market_error.startswith("Public feed recovered:")
+                else ORANGE
+            )
             box.add_widget(
-                self.label(self.market_error, 10, False, ORANGE)
+                self.label(self.market_error, 10, False, message_color)
             )
 
         market = self.make_card(orientation="vertical", height=164)
@@ -745,7 +830,9 @@ class DashboardUI(BoxLayout):
                 "Delta Exchange India • public ticker"
                 if price is not None
                 else "Waiting for fresh public market data",
-                10, False, TEAL if price is not None else MUTED, "center",
+                10, False,
+                TEAL if price is not None else MUTED,
+                "center",
             )
         )
         market.add_widget(
@@ -757,8 +844,12 @@ class DashboardUI(BoxLayout):
         box.add_widget(market)
 
         scan = self.make_card(orientation="vertical", height=118)
-        scan.add_widget(self.label("SMC / ICT SETUP STATUS", 11, True, MUTED))
-        scan.add_widget(self.label("NO TRADE", 22, True, TEAL, "center"))
+        scan.add_widget(
+            self.label("SMC / ICT SETUP STATUS", 11, True, MUTED)
+        )
+        scan.add_widget(
+            self.label("NO TRADE", 22, True, TEAL, "center")
+        )
         scan.add_widget(
             self.label(
                 "Strategy signals are not verified in this build.",
@@ -768,7 +859,9 @@ class DashboardUI(BoxLayout):
         box.add_widget(scan)
 
         safety = self.make_card(orientation="vertical", height=88)
-        safety.add_widget(self.label("SAFETY STATUS", 12, True, BLUE_LIGHT))
+        safety.add_widget(
+            self.label("SAFETY STATUS", 12, True, BLUE_LIGHT)
+        )
         safety.add_widget(
             self.label(
                 "Order placement disabled • Public data only",
@@ -812,7 +905,9 @@ class DashboardUI(BoxLayout):
                 )
             )
             right.add_widget(
-                self.label(self._updated_time(symbol), 8, False, MUTED, "right")
+                self.label(
+                    self._updated_time(symbol), 8, False, MUTED, "right"
+                )
             )
 
             card.add_widget(left)
@@ -835,7 +930,9 @@ class DashboardUI(BoxLayout):
 
         card = self.make_card(orientation="vertical", height=140)
         card.add_widget(
-            self.label("ORDER PLACEMENT DISABLED", 16, True, ORANGE, "center")
+            self.label(
+                "ORDER PLACEMENT DISABLED", 16, True, ORANGE, "center"
+            )
         )
         card.add_widget(
             self.label(
@@ -853,7 +950,9 @@ class DashboardUI(BoxLayout):
         ):
             item = self.make_card(height=52)
             item.add_widget(self.label(name, 10, True, MUTED))
-            item.add_widget(self.label(value, 10, True, WHITE, "right"))
+            item.add_widget(
+                self.label(value, 10, True, WHITE, "right")
+            )
             box.add_widget(item)
 
     # ------------------------- ANALYSIS -------------------------
@@ -912,7 +1011,9 @@ class DashboardUI(BoxLayout):
         )
         data.add_widget(
             self.label(
-                "Feed: " + ("RUNNING" if self._market_feed_started else "STOPPED"),
+                "Feed: " + (
+                    "RUNNING" if self._market_feed_started else "STOPPED"
+                ),
                 11, True,
                 GREEN if self._market_feed_started else ORANGE,
             )
@@ -925,7 +1026,8 @@ class DashboardUI(BoxLayout):
         )
         feed.add_widget(
             self.label(
-                self.market_error or "Prices update through the public REST feed.",
+                self.market_error
+                or "Prices update through the public REST feed.",
                 10, False, MUTED,
             )
         )
@@ -948,7 +1050,8 @@ class DashboardUI(BoxLayout):
         )
         box.add_widget(trading)
 
-    # Compatibility method required by main.py; no Paper Trading engine.
+    # Compatibility methods required by main.py.
+    # Paper Trading remains disabled.
     def stop_paper(self, *_):
         return None
 
