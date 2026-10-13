@@ -1,18 +1,21 @@
 
-"""GARRY V7 — public market dashboard.
-Public market data only. Live orders and Paper Trading are disabled.
+"""GARRY V7 — public market dashboard and strategy backtesting UI.
+
+Paper Trading removed.
+Backtesting is historical analysis only.
+Live order execution is not implemented or enabled here.
 """
 
-from math import cos, sin, pi
+import threading
+from datetime import datetime, timezone, timedelta
 
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.graphics import Color, RoundedRectangle, Line, Ellipse
+from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp, sp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
-from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
@@ -21,15 +24,12 @@ from app.state import APPROVED_SYMBOLS, AppState
 from data.market_feed import DeltaMarketFeed
 
 
-# ------------------------- COLOUR THEME -------------------------
-
 BG = (0.012, 0.027, 0.060, 1)
 CARD = (0.027, 0.060, 0.105, 1)
 CARD2 = (0.045, 0.090, 0.145, 1)
 WHITE = (0.91, 0.96, 1.00, 1)
 MUTED = (0.56, 0.68, 0.79, 1)
 BLUE = (0.10, 0.48, 0.90, 1)
-BLUE_LIGHT = (0.30, 0.68, 1.00, 1)
 TEAL = (0.08, 0.83, 0.74, 1)
 GREEN = (0.18, 0.84, 0.61, 1)
 RED = (1.00, 0.35, 0.38, 1)
@@ -37,9 +37,9 @@ ORANGE = (1.00, 0.68, 0.25, 1)
 
 
 class Card(BoxLayout):
-    def __init__(self, scale=1.0, **kwargs):
-        self.scale = scale
-        kwargs.setdefault("padding", dp(14) * scale)
+    def __init__(self, **kwargs):
+        kwargs.setdefault("padding", dp(12))
+        kwargs.setdefault("spacing", dp(8))
         super().__init__(**kwargs)
 
         with self.canvas.before:
@@ -47,7 +47,7 @@ class Card(BoxLayout):
             self.bg = RoundedRectangle(
                 pos=self.pos,
                 size=self.size,
-                radius=[dp(16) * scale],
+                radius=[dp(14)],
             )
 
         self.bind(pos=self._update_bg, size=self._update_bg)
@@ -57,99 +57,8 @@ class Card(BoxLayout):
         self.bg.size = self.size
 
 
-class NavIcon(Widget):
-    def __init__(self, page_name, **kwargs):
-        self.page_name = page_name
-        self.icon_color = MUTED
-        super().__init__(**kwargs)
-        self.bind(pos=self.redraw, size=self.redraw)
-
-    def set_color(self, color):
-        self.icon_color = color
-        self.redraw()
-
-    def redraw(self, *_):
-        self.canvas.clear()
-        if self.width <= 0 or self.height <= 0:
-            return
-
-        x, y = self.center
-        s = min(self.width, self.height) * 0.72
-        x1, x2 = x - s * 0.38, x + s * 0.38
-        y1, y2 = y - s * 0.32, y + s * 0.32
-
-        with self.canvas:
-            Color(*self.icon_color)
-
-            if self.page_name == "HOME":
-                Line(points=[
-                    x-s*.48, y, x, y+s*.43,
-                    x+s*.48, y, x1, y, x1, y1,
-                    x2, y1, x2, y
-                ], width=1.5)
-
-            elif self.page_name == "MARKETS":
-                Line(points=[x1, y1, x1, y2, x2, y2], width=1.4)
-                Line(points=[
-                    x-s*.29, y-s*.12,
-                    x-s*.08, y+s*.06,
-                    x+s*.08, y-s*.02,
-                    x+s*.30, y+s*.24
-                ], width=1.8)
-
-            elif self.page_name == "TRADES":
-                for off, length in (
-                    (s*.24, s*.48), (0, s*.62), (-s*.24, s*.48)
-                ):
-                    Line(points=[
-                        x-length/2, y+off,
-                        x+length/2, y+off
-                    ], width=1.7)
-
-            elif self.page_name == "ANALYSIS":
-                Ellipse(
-                    pos=(x-s*.34, y-s*.2),
-                    size=(s*.53, s*.53)
-                )
-                Line(points=[
-                    x+s*.1, y-s*.13,
-                    x+s*.39, y-s*.42
-                ], width=2)
-
-            else:
-                r = s * 0.28
-                Ellipse(pos=(x-r, y-r), size=(2*r, 2*r))
-                Ellipse(
-                    pos=(x-s*.09, y-s*.09),
-                    size=(s*.18, s*.18)
-                )
-                for i in range(8):
-                    a = 2*pi*i/8
-                    Line(points=[
-                        x+cos(a)*s*.32, y+sin(a)*s*.32,
-                        x+cos(a)*s*.43, y+sin(a)*s*.43
-                    ], width=1.8)
-
-
-class NavItem(BoxLayout):
-    def __init__(self, page_name, callback, **kwargs):
-        super().__init__(**kwargs)
-        self.page_name = page_name
-        self.callback = callback
-
-    def on_touch_down(self, touch):
-        if (
-            self.collide_point(*touch.pos)
-            and not getattr(touch, "is_mouse_scrolling", False)
-            and getattr(touch, "button", None) is None
-        ):
-            self.callback(self.page_name)
-            return True
-        return super().on_touch_down(touch)
-
-
 class DashboardUI(BoxLayout):
-    """Dashboard; public data only, no live order submission."""
+    """Public market dashboard with offline-safe backtesting controls."""
 
     def __init__(self, state: AppState, **kwargs):
         super().__init__(
@@ -160,43 +69,181 @@ class DashboardUI(BoxLayout):
 
         self.state = state
         self.current_page = "HOME"
-        self._resizing = False
-        self.scale = self._get_scale()
-
         self.market_snapshots = {}
         self.market_error = ""
+        self.market_feed = None
         self._market_feed_started = False
         self._retry_pending = False
-        self._last_refresh = 0.0
         self._feed_generation = 0
-        self.market_feed = None
+        self._last_refresh = 0.0
+
+        self.backtest_running = False
+        self.backtest_result = None
+        self.backtest_message = "Choose a market and run a historical backtest."
+        self.backtest_symbol = self.state.symbol
+        self.backtest_timeframe = "5m"
+        self.backtest_days = "30"
 
         self._create_feed()
 
         with self.canvas.before:
             Color(*BG)
             self.background = RoundedRectangle(
-                pos=self.pos, size=self.size
+                pos=self.pos,
+                size=self.size,
             )
 
-        self.bind(
-            pos=self._update_background,
-            size=self._update_background,
-        )
+        self.bind(pos=self._update_background, size=self._update_background)
 
-        self.page = BoxLayout(
-            orientation="vertical",
-            size_hint=(1, 1),
-        )
+        self.page = BoxLayout(orientation="vertical")
         self.add_widget(self.page)
 
-        self.navigation = self.build_navigation()
+        self.navigation = self._build_navigation()
         self.add_widget(self.navigation)
 
         self.show_home()
         Window.bind(size=self._on_window_size)
 
-    # ------------------------- MARKET FEED -------------------------
+    # -------------------- BASIC UI --------------------
+
+    def _update_background(self, *_):
+        self.background.pos = self.pos
+        self.background.size = self.size
+
+    def _on_window_size(self, *_):
+        self.navigate(self.current_page)
+
+    def label(self, text, size=14, color=WHITE, bold=False,
+              align="left", height=None):
+        item = Label(
+            text=str(text),
+            color=color,
+            font_size=sp(size),
+            bold=bold,
+            halign=align,
+            valign="middle",
+            size_hint_y=None if height else 1,
+            height=dp(height) if height else 0,
+        )
+        item.bind(
+            size=lambda widget, value: setattr(
+                widget, "text_size", (max(0, value[0] - dp(6)), value[1])
+            )
+        )
+        return item
+
+    def button(self, text, accent=False, height=46):
+        return Button(
+            text=text,
+            size_hint_y=None,
+            height=dp(height),
+            color=WHITE,
+            bold=True,
+            font_size=sp(13),
+            background_normal="",
+            background_down="",
+            background_color=BLUE if accent else CARD2,
+            border=(0, 0, 0, 0),
+        )
+
+    def card(self, orientation="vertical", height=None):
+        return Card(
+            orientation=orientation,
+            size_hint_y=None if height else 1,
+            height=dp(height) if height else 0,
+        )
+
+    def scroll_box(self):
+        scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width=dp(3),
+        )
+        content = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=(dp(12), dp(10), dp(12), dp(18)),
+            spacing=dp(10),
+        )
+        content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+        self.page.add_widget(scroll)
+        return content
+
+    def header(self, title, subtitle=""):
+        result = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(62 if subtitle else 42),
+            spacing=dp(2),
+        )
+        result.add_widget(
+            self.label(title, 22, WHITE, True, "center")
+        )
+        if subtitle:
+            result.add_widget(
+                self.label(subtitle, 10, TEAL, True, "center")
+            )
+        return result
+
+    def _build_navigation(self):
+        nav = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(62),
+            padding=dp(4),
+            spacing=dp(3),
+        )
+        self.nav_buttons = {}
+
+        for name in ("HOME", "MARKETS", "ANALYSIS", "BACKTEST", "SETTINGS"):
+            btn = Button(
+                text=name,
+                font_size=sp(9),
+                bold=True,
+                color=WHITE,
+                background_normal="",
+                background_down="",
+                background_color=BLUE if name == "HOME" else CARD2,
+                border=(0, 0, 0, 0),
+            )
+            btn.bind(on_release=lambda _btn, page=name: self.navigate(page))
+            nav.add_widget(btn)
+            self.nav_buttons[name] = btn
+
+        return nav
+
+    def navigate(self, page):
+        pages = {
+            "HOME": self.show_home,
+            "MARKETS": self.show_markets,
+            "ANALYSIS": self.show_analysis,
+            "BACKTEST": self.show_backtest,
+            "SETTINGS": self.show_settings,
+        }
+        if page not in pages:
+            page = "HOME"
+
+        self.current_page = page
+        for name, btn in self.nav_buttons.items():
+            btn.background_color = BLUE if name == page else CARD2
+
+        pages[page]()
+
+    def _set_page(self, title, subtitle=""):
+        self.page.clear_widgets()
+        content = self.scroll_box()
+        content.add_widget(self.header(title, subtitle))
+        return content
+
+    def _show_feed_status(self):
+        if self.market_error:
+            return self.market_error
+        return "Public market feed running" if self._market_feed_started else (
+            "Waiting for public market data"
+        )
+
+    # -------------------- PUBLIC MARKET FEED --------------------
 
     def _create_feed(self):
         try:
@@ -205,111 +252,76 @@ class DashboardUI(BoxLayout):
             self.market_error = ""
         except Exception as exc:
             self.market_feed = None
-            self.market_error = (
-                f"Feed initialization failed: {type(exc).__name__}: "
-                f"{str(exc)[:160]}"
-            )
+            self.market_error = f"Feed setup error: {type(exc).__name__}"
 
     def start_market_feed(self, *_):
         if self._market_feed_started:
             return
-
         try:
             if self.market_feed is None:
                 self._create_feed()
-
             if self.market_feed is None:
-                raise RuntimeError("Market feed could not initialize")
-
+                raise RuntimeError("Feed could not initialize")
             self.market_feed.start()
             self._market_feed_started = True
             self.market_error = "Connecting to Delta public market data..."
-
         except Exception as exc:
             self._market_feed_started = False
-            self.market_error = (
-                f"Feed start failed: {type(exc).__name__}: {str(exc)[:160]}"
-            )
-
-        self._refresh_market_page()
+            self.market_error = f"Feed start error: {type(exc).__name__}"
+        self._refresh_visible_page()
 
     def stop_market_feed(self, *_):
+        self._feed_generation += 1
         if self.market_feed is not None:
             try:
                 self.market_feed.stop()
             except Exception as exc:
-                self.market_error = (
-                    f"Feed stop failed: {type(exc).__name__}: {str(exc)[:120]}"
-                )
-
+                self.market_error = f"Feed stop error: {type(exc).__name__}"
         self._market_feed_started = False
 
     def retry_market_feed(self, *_):
-        """Restart feed without blocking the Kivy UI."""
         if self._retry_pending:
             self.market_error = "Retry already in progress..."
-            self._refresh_market_page()
+            self._refresh_visible_page()
             return
 
         self._retry_pending = True
-        self.market_error = "Retry requested — reconnecting..."
-        self._refresh_market_page()
+        self.market_error = "Reconnecting to public market data..."
+        self._feed_generation += 1
+        self._refresh_visible_page()
 
-        try:
-            self.stop_market_feed()
-            Clock.schedule_once(self._restart_market_feed, 0.25)
-        except Exception as exc:
-            self._retry_pending = False
-            self.market_error = (
-                f"Retry failed: {type(exc).__name__}: {str(exc)[:160]}"
-            )
-            self._refresh_market_page()
-
-    def _restart_market_feed(self, _dt):
         try:
             old_feed = self.market_feed
-
             if old_feed is not None:
                 try:
                     old_feed.remove_callback(self._on_market_snapshot)
+                    old_feed.stop()
                 except Exception:
                     pass
 
             self.market_feed = None
             self._create_feed()
             self._market_feed_started = False
-
             if self.market_feed is None:
-                raise RuntimeError("Could not initialize a fresh feed")
+                raise RuntimeError("Could not create feed")
 
             self.start_market_feed()
-
-            if self._market_feed_started:
-                self.market_error = (
-                    "Feed restarted. Waiting for ticker response..."
-                )
-
         except Exception as exc:
-            self._market_feed_started = False
-            self.market_error = (
-                f"Reconnect failed: {type(exc).__name__}: {str(exc)[:160]}"
-            )
-
+            self.market_error = f"Retry error: {type(exc).__name__}"
         finally:
             self._retry_pending = False
-            self._refresh_market_page()
+            self._refresh_visible_page()
 
     def _on_market_snapshot(self, snapshot):
-        # All Kivy widget updates must happen on the UI thread.
         generation = self._feed_generation
         Clock.schedule_once(
-            lambda dt, item=snapshot, gen=generation:
+            lambda _dt, item=snapshot, gen=generation:
                 self._apply_snapshot(item, gen),
             0,
         )
 
-    def _apply_snapshot(self, snapshot, generation=None):
-        if generation is not None and generation != self._feed_generation:
+    def _apply_snapshot(self, snapshot, generation):
+        if generation != self._feed_generation:
             return
 
         symbol = getattr(snapshot, "symbol", None)
@@ -317,505 +329,153 @@ class DashboardUI(BoxLayout):
             return
 
         self.market_snapshots[symbol] = snapshot
-
-        # Preserve the most recently received valid price, even if
-        # the connection later becomes stale or temporarily fails.
-        price = self._valid_price(getattr(snapshot, "last_price", None))
         if symbol == self.state.symbol:
-            if price is not None:
-                self.state.price = price
+            try:
+                price = float(getattr(snapshot, "last_price", 0) or 0)
+                if price > 0:
+                    self.state.price = price
+                self.state.connection_status = self._snapshot_status(snapshot)
+            except (TypeError, ValueError, AttributeError):
+                self.state.connection_status = "ERROR"
 
-            self.state.connection_status = self._snapshot_status(snapshot)
-
-        error = str(getattr(snapshot, "error", "") or "").strip()
+        error = getattr(snapshot, "error", "")
         if error:
-            self.market_error = f"{symbol}: {error[:200]}"
-        elif self._snapshot_status(snapshot) == "LIVE":
-            self.market_error = ""
+            self.market_error = f"{symbol}: {error}"
 
         now = Clock.get_time()
         if now - self._last_refresh >= 1:
             self._last_refresh = now
-            self._refresh_market_page()
-
-    @staticmethod
-    def _valid_price(value):
-        try:
-            number = float(value)
-            if number > 0 and number != float("inf") and number == number:
-                return number
-        except (TypeError, ValueError, OverflowError):
-            pass
-        return None
+            self._refresh_visible_page()
 
     def _snapshot_status(self, snapshot):
         if snapshot is None:
             return "OFFLINE"
-
         try:
-            stale_value = getattr(snapshot, "is_stale", True)
-            stale = stale_value() if callable(stale_value) else stale_value
+            stale = getattr(snapshot, "is_stale", True)
+            stale = stale() if callable(stale) else stale
             status = str(getattr(snapshot, "status", "OFFLINE")).upper()
-            price = self._valid_price(getattr(snapshot, "last_price", None))
-
             if stale:
-                return "STALE" if price is not None else "OFFLINE"
-
-            if status in ("CONNECTED", "LIVE"):
-                return "LIVE"
-
-            if status == "ERROR" and price is not None:
-                return "STALE"
-
-            return status
-
+                return "STALE" if getattr(snapshot, "last_price", None) else "OFFLINE"
+            return "LIVE" if status in ("CONNECTED", "LIVE") else status
         except Exception:
             return "ERROR"
 
     def _price(self, symbol):
-        """Return the last valid price; status separately indicates freshness."""
         snapshot = self.market_snapshots.get(symbol)
-        if snapshot is None:
+        if self._snapshot_status(snapshot) != "LIVE":
             return None
-
-        return self._valid_price(getattr(snapshot, "last_price", None))
-
-    def _symbol_error(self, symbol):
-        snapshot = self.market_snapshots.get(symbol)
-        if snapshot is None:
-            return ""
-
-        return str(getattr(snapshot, "error", "") or "").strip()
+        try:
+            value = float(getattr(snapshot, "last_price", 0) or 0)
+            return value if value > 0 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     def _updated_time(self, symbol):
         snapshot = self.market_snapshots.get(symbol)
-        return str(
-            getattr(snapshot, "updated_utc", "") or "No successful update"
-        )
+        return getattr(snapshot, "updated_utc", "") or "No successful update"
 
-    def _refresh_market_page(self):
+    def _refresh_visible_page(self):
         if self.current_page in ("HOME", "MARKETS", "SETTINGS"):
             self.navigate(self.current_page)
 
-    # ------------------------- UI HELPERS -------------------------
-
-    def _get_scale(self):
-        return max(
-            0.82,
-            min(1.12, (Window.width or dp(390)) / dp(390)),
-        )
-
-    def d(self, value):
-        return dp(value) * self.scale
-
-    def f(self, value):
-        return sp(value) * self.scale
-
-    def _update_background(self, *_):
-        self.background.pos = self.pos
-        self.background.size = self.size
-
-    def _on_window_size(self, *_):
-        if self._resizing:
-            return
-
-        new_scale = self._get_scale()
-        if abs(new_scale - self.scale) < 0.02:
-            return
-
-        self._resizing = True
-        try:
-            self.scale = new_scale
-            self.navigation.height = self.d(68)
-            self.navigate(self.current_page)
-        finally:
-            self._resizing = False
-
-    def label(
-        self, text, size=14, bold=False, color=WHITE, align="left"
-    ):
-        widget = Label(
-            text=str(text),
-            font_size=self.f(size),
-            bold=bold,
-            color=color,
-            halign=align,
-            valign="middle",
-            shorten=False,
-        )
-        widget.bind(
-            size=lambda item, value: setattr(
-                item, "text_size", (max(0, value[0] - self.d(4)), value[1])
-            )
-        )
-        return widget
-
-    def button(self, text, height=48, accent=False):
-        return Button(
-            text=text,
-            size_hint_y=None,
-            height=self.d(height),
-            font_size=self.f(13),
-            bold=True,
-            color=WHITE,
-            background_normal="",
-            background_down="",
-            background_color=BLUE if accent else CARD2,
-            border=(0, 0, 0, 0),
-        )
-
-    def make_card(self, orientation="horizontal", height=70, padding=14):
-        return Card(
-            scale=self.scale,
-            orientation=orientation,
-            size_hint_y=None,
-            height=self.d(height),
-            padding=self.d(padding),
-            spacing=self.d(8),
-        )
-
-    def clear_page(self):
-        self.page.clear_widgets()
-
-    def scroll_container(self):
-        scroll = ScrollView(
-            do_scroll_x=False,
-            do_scroll_y=True,
-            bar_width=self.d(3),
-            scroll_type=["content", "bars"],
-        )
-
-        box = BoxLayout(
-            orientation="vertical",
-            size_hint=(1, None),
-            padding=(self.d(12), self.d(10), self.d(12), self.d(18)),
-            spacing=self.d(10),
-        )
-        box.bind(minimum_height=box.setter("height"))
-        scroll.add_widget(box)
-        self.page.add_widget(scroll)
-        return box
-
-    def header(self, title, subtitle=""):
-        header = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=self.d(68 if subtitle else 48),
-            spacing=self.d(2),
-        )
-        header.add_widget(self.label(title, 23, True, WHITE, "center"))
-
-        if subtitle:
-            header.add_widget(self.label(subtitle, 10, True, TEAL, "center"))
-
-        return header
-
-    def show_notice(self, title, message):
-        content = BoxLayout(
-            orientation="vertical", padding=dp(16), spacing=dp(12)
-        )
-        msg = Label(
-            text=str(message), color=WHITE, halign="center", valign="middle"
-        )
-        msg.bind(size=lambda widget, size: setattr(widget, "text_size", size))
-        content.add_widget(msg)
-
-        close = Button(
-            text="OK",
-            size_hint_y=None,
-            height=dp(44),
-            background_normal="",
-            background_color=BLUE,
-            color=WHITE,
-        )
-        content.add_widget(close)
-
-        popup = Popup(
-            title=title,
-            content=content,
-            size_hint=(0.85, None),
-            height=dp(230),
-            auto_dismiss=False,
-        )
-        close.bind(on_release=popup.dismiss)
-        popup.open()
-
-    # ------------------------- NAVIGATION -------------------------
-
-    def build_navigation(self):
-        nav = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=self.d(68),
-            padding=(self.d(5), self.d(5)),
-            spacing=self.d(2),
-        )
-
-        with nav.canvas.before:
-            Color(*CARD)
-            nav.nav_background = RoundedRectangle(
-                pos=nav.pos, size=nav.size, radius=[self.d(15)]
-            )
-
-        nav.bind(
-            pos=lambda _, value: setattr(nav.nav_background, "pos", value),
-            size=lambda _, value: setattr(nav.nav_background, "size", value),
-        )
-
-        self.nav_buttons = {}
-        self.nav_icons = {}
-        self.nav_indicators = {}
-
-        for name in ("HOME", "MARKETS", "TRADES", "ANALYSIS", "SETTINGS"):
-            item = NavItem(
-                page_name=name,
-                callback=self.navigate,
-                orientation="vertical",
-                spacing=self.d(1),
-                padding=(self.d(2), self.d(4)),
-            )
-
-            with item.canvas.before:
-                color = Color(*(BLUE if name == self.current_page else CARD))
-                shape = RoundedRectangle(
-                    pos=item.pos, size=item.size, radius=[self.d(10)]
-                )
-
-            item.bind(
-                pos=lambda _, value, s=shape: setattr(s, "pos", value),
-                size=lambda _, value, s=shape: setattr(s, "size", value),
-            )
-
-            icon = NavIcon(name, size_hint=(1, 0.62))
-            label = Label(
-                text=name,
-                size_hint=(1, 0.38),
-                font_size=self.f(8.5),
-                bold=True,
-                color=TEAL if name == self.current_page else MUTED,
-                halign="center",
-                valign="middle",
-            )
-
-            item.add_widget(icon)
-            item.add_widget(label)
-            nav.add_widget(item)
-
-            self.nav_buttons[name] = label
-            self.nav_icons[name] = icon
-            self.nav_indicators[name] = (item, color, shape)
-
-        return nav
-
-    def refresh_navigation(self):
-        for name, label in self.nav_buttons.items():
-            active = name == self.current_page
-            label.color = TEAL if active else MUTED
-            self.nav_icons[name].set_color(TEAL if active else MUTED)
-
-            _, color, _ = self.nav_indicators[name]
-            color.rgba = (
-                (BLUE[0], BLUE[1], BLUE[2], 0.25) if active else CARD
-            )
-
-    def navigate(self, page):
-        pages = {
-            "HOME": self.show_home,
-            "MARKETS": self.show_markets,
-            "TRADES": self.show_trades,
-            "ANALYSIS": self.show_analysis,
-            "SETTINGS": self.show_settings,
-        }
-
-        if page not in pages:
-            page = "HOME"
-
-        self.current_page = page
-        pages[page]()
-        self.refresh_navigation()
-
-    def change_symbol(self, spinner, value):
-        if value not in APPROVED_SYMBOLS:
-            spinner.text = self.state.symbol
-            return
-
-        self.state.symbol = value
-        price = self._price(value)
-
-        if price is not None:
-            self.state.price = price
-
-        self.state.connection_status = self._snapshot_status(
-            self.market_snapshots.get(value)
-        )
-        self.show_home()
-        self.refresh_navigation()
-
-    # ------------------------- HOME -------------------------
+    # -------------------- HOME --------------------
 
     def show_home(self):
-        self.clear_page()
-        box = self.scroll_container()
-        box.add_widget(self.header("GARRY V7", "SMC / ICT • MARKET DASHBOARD"))
+        box = self._set_page("GARRY V7", "SMC / ICT • PUBLIC MARKET DASHBOARD")
 
-        symbol = self.state.symbol
-        snapshot = self.market_snapshots.get(symbol)
-        price = self._price(symbol)
-        status = self._snapshot_status(snapshot)
-        error = self._symbol_error(symbol)
+        status = self._snapshot_status(self.market_snapshots.get(self.state.symbol))
+        price = self._price(self.state.symbol)
 
-        card = self.make_card(height=78)
-        left = BoxLayout(orientation="vertical")
-        left.add_widget(self.label("PUBLIC MARKET DATA", 10, True, MUTED))
-        left.add_widget(self.label(
-            status, 17, True, GREEN if status == "LIVE" else ORANGE
-        ))
-        card.add_widget(left)
-        card.add_widget(self.label(
-            "LIVE ORDERS DISABLED", 10, True, BLUE_LIGHT, "right"
-        ))
-        box.add_widget(card)
+        status_card = self.card(height=76)
+        status_card.add_widget(self.label("PUBLIC MARKET CONNECTION", 11, MUTED, True))
+        status_card.add_widget(
+            self.label(status, 18, GREEN if status == "LIVE" else ORANGE, True)
+        )
+        box.add_widget(status_card)
 
         if self.market_error:
-            box.add_widget(self.label(self.market_error, 10, False, ORANGE))
+            box.add_widget(self.label(self.market_error, 10, ORANGE))
 
-        market = self.make_card(orientation="vertical", height=172)
-        row = BoxLayout(
-            size_hint_y=None, height=self.d(38), spacing=self.d(6)
-        )
-        row.add_widget(self.label("SELECT MARKET", 11, True, MUTED))
-
+        market = self.card(height=170)
+        market.add_widget(self.label("SELECT MARKET", 11, MUTED, True))
         selector = Spinner(
-            text=symbol,
+            text=self.state.symbol,
             values=APPROVED_SYMBOLS,
-            size_hint_x=None,
-            width=self.d(128),
-            font_size=self.f(12),
+            size_hint_y=None,
+            height=dp(42),
             background_normal="",
             background_color=CARD2,
             color=WHITE,
         )
-        selector.bind(text=self.change_symbol)
-        row.add_widget(selector)
-        market.add_widget(row)
-
-        # Show the last valid received price even when status is STALE.
-        market.add_widget(self.label(
-            f"{price:,.2f}" if price is not None else "--",
-            27, True, WHITE, "center"
-        ))
-        market.add_widget(self.label(
-            "Delta Exchange India • public ticker"
-            if price is not None else "Waiting for public market price",
-            10, False, TEAL if price is not None else MUTED, "center"
-        ))
-        market.add_widget(self.label(
-            "Updated: " + self._updated_time(symbol),
-            8, False, MUTED, "center"
-        ))
-        if error:
-            market.add_widget(self.label(
-                "API error: " + error[:180], 9, False, RED, "center"
-            ))
+        selector.bind(text=self._change_symbol)
+        market.add_widget(selector)
+        market.add_widget(
+            self.label(
+                f"{price:,.2f}" if price is not None else "--",
+                27, WHITE, True, "center",
+            )
+        )
+        market.add_widget(
+            self.label(
+                "Delta Exchange India • public ticker",
+                10, TEAL, False, "center",
+            )
+        )
         box.add_widget(market)
 
-        scan = self.make_card(orientation="vertical", height=118)
-        scan.add_widget(self.label("SMC / ICT SETUP STATUS", 11, True, MUTED))
-        scan.add_widget(self.label("NO TRADE", 22, True, TEAL, "center"))
-        scan.add_widget(self.label(
-            "Strategy signals are not verified in this build.",
-            10, False, MUTED, "center"
-        ))
-        box.add_widget(scan)
+        bt = self.button("OPEN STRATEGY BACKTEST", True)
+        bt.bind(on_release=lambda *_: self.navigate("BACKTEST"))
+        box.add_widget(bt)
 
-        safety = self.make_card(orientation="vertical", height=88)
-        safety.add_widget(self.label("SAFETY STATUS", 12, True, BLUE_LIGHT))
+        safety = self.card(height=76)
+        safety.add_widget(self.label("TRADING STATUS", 12, TEAL, True))
         safety.add_widget(self.label(
-            "Order placement disabled • Public data only",
-            10, False, MUTED, "center"
+            "Backtesting only • No exchange orders sent",
+            10, MUTED,
         ))
         box.add_widget(safety)
 
-    # ------------------------- MARKETS -------------------------
+    def _change_symbol(self, _spinner, value):
+        if value not in APPROVED_SYMBOLS:
+            return
+        self.state.symbol = value
+        self.state.connection_status = self._snapshot_status(
+            self.market_snapshots.get(value)
+        )
+        self.navigate("HOME")
+
+    # -------------------- MARKETS --------------------
 
     def show_markets(self):
-        self.clear_page()
-        box = self.scroll_container()
-        box.add_widget(self.header(
-            "MARKETS", "DELTA EXCHANGE INDIA • PUBLIC DATA"
-        ))
+        box = self._set_page("MARKETS", "DELTA EXCHANGE INDIA • PUBLIC DATA")
 
         for symbol in APPROVED_SYMBOLS:
             price = self._price(symbol)
-            snapshot = self.market_snapshots.get(symbol)
-            status = self._snapshot_status(snapshot)
-            error = self._symbol_error(symbol)
-
-            card = self.make_card(height=82)
+            status = self._snapshot_status(self.market_snapshots.get(symbol))
+            row = self.card(orientation="horizontal", height=66)
             left = BoxLayout(orientation="vertical")
-            left.add_widget(self.label(symbol, 14, True))
-            left.add_widget(self.label(
-                status, 9, False, GREEN if status == "LIVE" else ORANGE
-            ))
-            if error:
-                left.add_widget(self.label(
-                    "API: " + error[:100], 8, False, RED
-                ))
-
+            left.add_widget(self.label(symbol, 13, WHITE, True))
+            left.add_widget(self.label(status, 9, GREEN if status == "LIVE" else ORANGE))
             right = BoxLayout(orientation="vertical")
             right.add_widget(self.label(
                 f"{price:,.2f}" if price is not None else "--",
-                14, True, GREEN if status == "LIVE" else ORANGE, "right"
+                14, WHITE, True, "right",
             ))
             right.add_widget(self.label(
-                self._updated_time(symbol), 8, False, MUTED, "right"
+                str(self._updated_time(symbol)), 8, MUTED, False, "right",
             ))
+            row.add_widget(left)
+            row.add_widget(right)
+            box.add_widget(row)
 
-            card.add_widget(left)
-            card.add_widget(right)
-            box.add_widget(card)
+        retry = self.button("RETRY PUBLIC MARKET FEED", True)
+        retry.bind(on_release=self.retry_market_feed)
+        box.add_widget(retry)
 
-        box.add_widget(self.label(
-            "Public prices only. No exchange orders are sent.",
-            10, False, MUTED, "center"
-        ))
-
-    # ------------------------- TRADES -------------------------
-
-    def show_trades(self):
-        self.clear_page()
-        box = self.scroll_container()
-        box.add_widget(self.header("TRADES", "ORDER SAFETY"))
-
-        card = self.make_card(orientation="vertical", height=140)
-        card.add_widget(self.label(
-            "ORDER PLACEMENT DISABLED", 16, True, ORANGE, "center"
-        ))
-        card.add_widget(self.label(
-            "This build does not submit live exchange orders. "
-            "Paper Trading is not enabled.",
-            11, False, MUTED, "center"
-        ))
-        box.add_widget(card)
-
-        for name, value in (
-            ("LIVE ORDERS", "DISABLED"),
-            ("PUBLIC DATA", "NO API KEY REQUIRED"),
-            ("EXCHANGE ACCOUNT", "NOT CONNECTED"),
-        ):
-            item = self.make_card(height=52)
-            item.add_widget(self.label(name, 10, True, MUTED))
-            item.add_widget(self.label(value, 10, True, WHITE, "right"))
-            box.add_widget(item)
-
-    # ------------------------- ANALYSIS -------------------------
+    # -------------------- ANALYSIS --------------------
 
     def show_analysis(self):
-        self.clear_page()
-        box = self.scroll_container()
-        box.add_widget(self.header(
-            "ANALYSIS", "SMC / ICT MARKET STRUCTURE"
-        ))
+        box = self._set_page("ANALYSIS", "SMC / ICT • CANDLE ANALYSIS")
 
         for name, value in (
             ("MARKET STRUCTURE", "NOT CALCULATED"),
@@ -824,82 +484,184 @@ class DashboardUI(BoxLayout):
             ("ORDER BLOCK", "NOT CALCULATED"),
             ("FAIR VALUE GAP", "NOT CALCULATED"),
             ("IDM / INDUCEMENT", "NOT CALCULATED"),
-            ("SIGNAL", "NO TRADE"),
         ):
-            card = self.make_card(orientation="vertical", height=58)
-            card.add_widget(self.label(name, 10, True, MUTED))
-            card.add_widget(self.label(
-                value, 12, True, TEAL if value == "NO TRADE" else WHITE
-            ))
-            box.add_widget(card)
+            item = self.card(height=54)
+            item.add_widget(self.label(name, 10, MUTED, True))
+            item.add_widget(self.label(value, 12, WHITE, True))
+            box.add_widget(item)
 
         box.add_widget(self.label(
-            "SMC/ICT signals remain unverified until a strategy engine "
-            "is tested against market candles.",
-            10, False, ORANGE
+            "Live signals are not verified by this screen. Use backtesting "
+            "to evaluate a strategy on historical candles.",
+            10, ORANGE,
         ))
 
-    # ------------------------- SETTINGS -------------------------
+    # -------------------- STRATEGY BACKTEST --------------------
+
+    def show_backtest(self):
+        box = self._set_page(
+            "STRATEGY BACKTEST",
+            "HISTORICAL CANDLES • NO LIVE ORDERS",
+        )
+
+        settings = self.card(height=220)
+        settings.add_widget(self.label("BACKTEST SETTINGS", 13, TEAL, True))
+
+        settings.add_widget(self.label("Market", 10, MUTED, True, height=22))
+        symbol = Spinner(
+            text=self.backtest_symbol,
+            values=APPROVED_SYMBOLS,
+            size_hint_y=None,
+            height=dp(38),
+            background_normal="",
+            background_color=CARD2,
+            color=WHITE,
+        )
+        symbol.bind(text=lambda _w, value: setattr(self, "backtest_symbol", value))
+        settings.add_widget(symbol)
+
+        settings.add_widget(self.label("Timeframe", 10, MUTED, True, height=22))
+        timeframe = Spinner(
+            text=self.backtest_timeframe,
+            values=("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"),
+            size_hint_y=None,
+            height=dp(38),
+            background_normal="",
+            background_color=CARD2,
+            color=WHITE,
+        )
+        timeframe.bind(
+            text=lambda _w, value: setattr(self, "backtest_timeframe", value)
+        )
+        settings.add_widget(timeframe)
+
+        settings.add_widget(self.label("History window", 10, MUTED, True, height=22))
+        days = Spinner(
+            text=self.backtest_days,
+            values=("7", "14", "30", "60", "90"),
+            size_hint_y=None,
+            height=dp(38),
+            background_normal="",
+            background_color=CARD2,
+            color=WHITE,
+        )
+        days.bind(text=lambda _w, value: setattr(self, "backtest_days", value))
+        settings.add_widget(days)
+        box.add_widget(settings)
+
+        run_button = self.button(
+            "RUN HISTORICAL BACKTEST" if not self.backtest_running else "BACKTEST RUNNING...",
+            True,
+        )
+        run_button.disabled = self.backtest_running
+        run_button.bind(on_release=self.run_strategy_backtest)
+        box.add_widget(run_button)
+
+        result = self.card(height=250)
+        result.add_widget(self.label("BACKTEST RESULTS", 13, TEAL, True))
+        result.add_widget(self.label(
+            self.backtest_message, 11, WHITE,
+        ))
+
+        if isinstance(self.backtest_result, dict):
+            for key in (
+                "symbol", "timeframe", "candles", "total_trades",
+                "winning_trades", "losing_trades", "win_rate",
+                "net_pnl", "profit_factor", "max_drawdown",
+            ):
+                if key in self.backtest_result:
+                    result.add_widget(self.label(
+                        f"{key.replace('_', ' ').title()}: "
+                        f"{self.backtest_result[key]}",
+                        10, MUTED,
+                    ))
+        box.add_widget(result)
+
+        box.add_widget(self.label(
+            "Backtest results are historical simulations, not guaranteed "
+            "future performance. Fees/slippage must be included by the engine.",
+            9, ORANGE,
+        ))
+
+    def run_strategy_backtest(self, *_):
+        if self.backtest_running:
+            return
+
+        self.backtest_running = True
+        self.backtest_result = None
+        self.backtest_message = "Downloading historical candles and running strategy..."
+        self.navigate("BACKTEST")
+
+        symbol = self.backtest_symbol
+        timeframe = self.backtest_timeframe
+        days = int(self.backtest_days)
+
+        def worker():
+            try:
+                # This module is supplied as File 2.
+                from strategy.backtest import run_backtest
+
+                result = run_backtest(
+                    symbol=symbol,
+                    resolution=timeframe,
+                    days=days,
+                )
+                if not isinstance(result, dict):
+                    raise TypeError("Backtest engine returned an invalid result")
+                Clock.schedule_once(
+                    lambda _dt, data=result: self._backtest_complete(data, None),
+                    0,
+                )
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {str(exc)[:220]}"
+                Clock.schedule_once(
+                    lambda _dt, error=message: self._backtest_complete(None, error),
+                    0,
+                )
+
+        threading.Thread(
+            target=worker,
+            name="GarryStrategyBacktest",
+            daemon=True,
+        ).start()
+
+    def _backtest_complete(self, result, error):
+        self.backtest_running = False
+        if error:
+            self.backtest_result = None
+            self.backtest_message = "Backtest failed: " + error
+        else:
+            self.backtest_result = result
+            self.backtest_message = "Backtest completed. Review metrics below."
+        self.navigate("BACKTEST")
+
+    # -------------------- SETTINGS --------------------
 
     def show_settings(self):
-        self.clear_page()
-        box = self.scroll_container()
-        box.add_widget(self.header("SETTINGS", "PUBLIC DATA • SAFETY"))
+        box = self._set_page("SETTINGS", "PUBLIC DATA • BACKTESTING")
 
-        data = self.make_card(orientation="vertical", height=116)
-        data.add_widget(self.label(
-            "DELTA PUBLIC MARKET DATA", 13, True, BLUE_LIGHT
-        ))
-        data.add_widget(self.label(
-            "Public ticker requests do not need API credentials. "
-            "This dashboard does not collect or store private keys.",
-            10, False, MUTED
-        ))
-        data.add_widget(self.label(
-            "Feed: " + ("RUNNING" if self._market_feed_started else "STOPPED"),
-            11, True, GREEN if self._market_feed_started else ORANGE
-        ))
-        box.add_widget(data)
-
-        feed = self.make_card(orientation="vertical", height=156)
-        feed.add_widget(self.label(
-            "MARKET DATA CONNECTION", 13, True, BLUE_LIGHT
-        ))
-        feed.add_widget(self.label(
-            self.market_error or "Public REST ticker feed.",
-            10, False, MUTED
-        ))
-
-        retry = self.button("RETRY PUBLIC FEED", 48, True)
+        feed = self.card(height=150)
+        feed.add_widget(self.label("MARKET DATA CONNECTION", 13, TEAL, True))
+        feed.add_widget(self.label(self._show_feed_status(), 10, MUTED))
+        retry = self.button("RETRY PUBLIC FEED", True)
         retry.bind(on_release=self.retry_market_feed)
         feed.add_widget(retry)
         box.add_widget(feed)
 
-        trading = self.make_card(orientation="vertical", height=110)
-        trading.add_widget(self.label(
-            "TRADING SAFETY", 13, True, BLUE_LIGHT
+        safety = self.card(height=112)
+        safety.add_widget(self.label("EXECUTION SAFETY", 13, TEAL, True))
+        safety.add_widget(self.label(
+            "Paper Trading: REMOVED\nLive Orders: NOT IMPLEMENTED / DISABLED",
+            11, ORANGE,
         ))
-        trading.add_widget(self.label(
-            "LIVE ORDER PLACEMENT: DISABLED\n"
-            "Fingerprint unlock is not integrated in this file.",
-            10, False, ORANGE
-        ))
-        box.add_widget(trading)
+        box.add_widget(safety)
 
-    # Compatibility methods required by main.py.
+    # Compatibility methods retained for main.py.
     def stop_paper(self, *_):
         return None
 
     def start_paper(self, *_):
-        self.show_notice(
-            "DISABLED", "Paper Trading is not enabled in this build."
-        )
+        return None
 
     def emergency_stop(self, *_):
-        self.show_notice(
-            "LIVE ORDERS DISABLED", "No live exchange orders are enabled."
-        )
-
-    def on_parent(self, widget, parent):
-        """Compatibility hook; no automatic feed start here."""
-        return
+        self.stop_market_feed()
