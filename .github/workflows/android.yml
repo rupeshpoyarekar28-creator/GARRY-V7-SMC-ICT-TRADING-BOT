@@ -18,14 +18,15 @@ jobs:
           export ANDROID_HOME=/usr/local/lib/android/sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
           sudo apt update -qq
-          sudo apt install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev libsqlite3-dev
+          sudo apt install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev libsqlite3-dev unzip
           pip install buildozer cython==0.29.36
           mkdir -p $ANDROID_HOME/tools/bin
           ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager
           yes | sdkmanager --licenses || true
       - name: Build APK
         run: |
-          rm -rf .buildozer bin
+          rm -rf.buildozer bin
+          rm -rf ~/.buildozer/android/platform/android-ndk*
           buildozer android debug
       - name: Upload APK
         uses: actions/upload-artifact@v4
