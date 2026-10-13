@@ -6,9 +6,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -16,14 +18,13 @@ jobs:
 
       - name: Install Deps & Accept Licenses
         run: |
-          sudo apt update
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          sudo apt update -qq
           sudo apt install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev
           pip install buildozer cython==0.29.36
-          yes | sdkmanager --licenses
+          yes | sdkmanager --licenses || true
           sdkmanager "build-tools;33.0.2" "platforms;android-33"
-          mkdir -p ~/.android/licenses
-          echo "8933bad161af4178b1185d1a37fbf41ea5269c55" > ~/.android/licenses/android-sdk-license
-          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> ~/.android/licenses/android-sdk-license
 
       - name: Build APK
         run: |
