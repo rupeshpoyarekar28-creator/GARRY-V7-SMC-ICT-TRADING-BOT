@@ -23,13 +23,12 @@ jobs:
       - name: Install Buildozer deps
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev libsqlite3-dev lld libncurses5
-          pip install --upgrade pip
+          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev libsqlite3-dev lld
           pip install buildozer cython==0.29.36
 
       - name: Build APK
         run: |
-          rm -rf bin/ .buildozer/
+          rm -rf bin/.buildozer/
           yes | buildozer android debug
 
       - name: Upload APK
