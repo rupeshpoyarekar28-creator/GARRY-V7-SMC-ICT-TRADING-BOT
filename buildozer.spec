@@ -1,82 +1,43 @@
-[app]
+import os
+import ssl
+import requests
+import certifi
 
-# App Details
-title = GARRY V7
-package.name = garryv7
-package.domain = com.rupes.garryv7
+# Android SSL Fix
+os.environ['SSL_CERT_FILE'] = certifi.where()
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
-source.dir =.
-source.include_exts = py,png,jpg,kv,atlas,json,txt
-source.include_patterns = app/*,data/*,strategy/*,*.kv
-source.exclude_exts = spec,md
-source.exclude_patterns = bin,venv,.git,__pycache__
+class DeltaMarketFeed:
+    BASE_URL = "https://api.india.delta.exchange"
 
-version = 7.0
-version.regex = __version__ = ['"]([^'"]+)['"]
-version.filename = %(source.dir)s/main.py
+    def __init__(self):
+        self.session = requests.Session()
 
-# --- HA SARVAT MAHATVACHI LINE AHE - SSL FIX SATHI ---
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,requests,urllib3,charset-normalizer,idna,certifi,openssl,pillow
+    def _make_request(self, endpoint):
+        url = self.BASE_URL + endpoint
+        try:
+            resp = self.session.get(url, timeout=15, verify=certifi.where())
+            resp.raise_for_status()
+            return resp.json()
+        except:
+            # Android sathi verify band
+            resp = self.session.get(url, timeout=15, verify=False)
+            resp.raise_for_status()
+            return resp.json()
 
-# Permissions
-android.permissions = INTERNET,ACCESS_NETWORK_STATE
+    def get_ticker(self, symbol="BTCUSD"):
+        try:
+            data = self._make_request("/v2/tickers/" + symbol)
+            return data
+        except:
+            all_data = self._make_request("/v2/tickers")
+            if 'result' in all_data:
+                for t in all_data['result']:
+                    if symbol in t.get('symbol',''):
+                        return t
+            return all_data
 
-# Application Icon (jar tuzyakade nasel tar he line comment kar)
-# icon.filename = %(source.dir)s/app/icon.png
-# presplash.filename = %(source.dir)s/app/presplash.png
+    def get_all_tickers(self):
+        return self._make_request("/v2/tickers")
 
-[buildozer]
-
-log_level = 2
-warn_on_root = 1
-
-# --- ANDROID BUILD ---
-
-# (int) Target API
-android.api = 33
-
-# (int) Minimum API
-android.minapi = 21
-
-# (str) NDK version
-android.ndk = 25b
-
-# (str) Antik SDK path nahi lagat - auto download hoil
-
-# Bootstrap
-p4a.bootstrap = sdl2
-
-# Whitelist for certifi
-p4a.whitelist = lib-dynload,certifi
-
-# Orientation
-orientation = portrait
-
-# Allow backup
-android.allow_backup = True
-
-# Fullscreen nako
-fullscreen = 0
-
-# Keep screen on
-android.wakelock = False
-
-# Android arch - donhi sathi
-android.archs = arm64-v8a, armeabi-v7a
-
-# --- DEBUG / RELEASE ---
-# debug sathi khali kahich badlu nakos
-
-# (str) Python-for-android branch
-p4a.branch = master
-
-# (list) Extra args
-p4a.extra_args = --with-recipes=openssl,requests,certifi
-
-[app:darwin]
-
-# Mac sathi nako
-
-[app:linux]
-
-# Linux sathi nako
+market_feed = DeltaMarketFeed()
