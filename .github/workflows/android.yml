@@ -14,14 +14,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install test deps - LIGHT
+      - name: Install light deps
         run: |
-          pip install --upgrade pip
           pip install requests certifi urllib3 pytest
-
-      - name: Run tests
-        run: |
-          python -m pytest tests/ -v || echo "skip tests"
+          python -m pytest tests/ -v || echo "skip"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -29,18 +25,28 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK
+      - name: Install Android SDK manually
         run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wget unzip
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
+          unzip -q tools.zip
+          mv cmdline-tools latest
+          export ANDROID_HOME=$HOME/android-sdk
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393"
 
       - name: Install Buildozer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev libsqlite3-dev
+          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev libbz2-dev libsqlite3-dev lld
           pip install buildozer cython==0.29.36
 
       - name: Build APK
