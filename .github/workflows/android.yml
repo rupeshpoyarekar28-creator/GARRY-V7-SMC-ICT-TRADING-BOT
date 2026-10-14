@@ -25,11 +25,11 @@ jobs:
           yes | sdkmanager --licenses || true
       - name: Build APK
         run: |
-          rm -rf.buildozer
+          rm -rf .buildozer
           rm -rf bin
           buildozer android debug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: GARRY-V7-APK
-          path: bin/*.apk
+          path: bin/*.apk: 
