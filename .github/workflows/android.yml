@@ -52,7 +52,7 @@ steps:
       python -m compileall -q main.py app data strategy
       echo "Python syntax check passed."
 
-  - name: Install Python test dependencies
+  - name: Install Python dependencies
     shell: bash
     run: |
       set -euo pipefail
@@ -63,10 +63,10 @@ steps:
     shell: bash
     run: |
       set -euo pipefail
-      if [ -d tests ]; then
+      if [ -d tests ] && find tests -type f -name "test_*.py" -print -quit | grep -q .; then
         python -m unittest discover -s tests -p "test_*.py" -v
       else
-        echo "No tests directory found; skipping unit tests."
+        echo "No unit test files found; skipping unit tests."
       fi
 
   - name: Verify backtesting import
@@ -101,6 +101,7 @@ steps:
       set -euo pipefail
       java -version
       python --version
+      command -v sdkmanager
       test -d "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}"
       test -d "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
       test -d "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
