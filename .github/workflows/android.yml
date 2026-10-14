@@ -25,8 +25,8 @@ jobs:
           yes | sdkmanager --licenses || true
       - name: Build APK
         run: |
-          rm -rf.buildozer bin
-          rm -rf ~/.buildozer/android/platform/android-ndk*
+          rm -rf.buildozer
+          rm -rf bin
           buildozer android debug
       - name: Upload APK
         uses: actions/upload-artifact@v4
