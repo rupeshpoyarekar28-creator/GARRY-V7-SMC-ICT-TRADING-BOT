@@ -1,267 +1,158 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
 import requests
-from datetime import datetime, timezone
-from typing import Any
 
+from backtest_engine import run_backtest
 
-# ============================================================
-# GARRY V7 - HISTORICAL DATA RUNNER
-# Data download and validation only.
-# No live trading and no exchange orders.
-# ============================================================
 
 DASHBOARD_URL = os.getenv(
     "GARRY_DASHBOARD_URL",
     "https://garry-v7-smc-ict-trading-bot.onrender.com",
 ).rstrip("/")
 
-REQUEST_TIMEOUT = 20
-LIVE_ORDERS_ENABLED = False
+TIMEOUT = 25
 
-RESOLUTION_SECONDS = {
-    "1m": 60,
-    "3m": 180,
-    "5m": 300,
-    "15m": 900,
-    "30m": 1800,
+RESOLUTIONS = {
     "1h": 3600,
-    "2h": 7200,
-    "4h": 14400,
-    "6h": 21600,
-    "1d": 86400,
-    "1w": 604800,
+    "15m": 900,
+    "5m": 300,
 }
 
-
-class BacktestDataError(Exception):
-    """Raised when historical market data is invalid or unavailable."""
+LIVE_ORDERS_ENABLED = False
 
 
-def fetch_candles(
-    symbol: str,
-    resolution: str,
-    start: int,
-    end: int,
-) -> list[dict[str, Any]]:
-    """Fetch candles through the existing GARRY V7 dashboard API."""
-
-    if resolution not in RESOLUTION_SECONDS:
-        raise BacktestDataError(
-            f"Unsupported resolution: {resolution}"
-        )
-
-    if start >= end:
-        raise BacktestDataError("Start timestamp must be before end")
-
+def fetch_candles(symbol: str, resolution: str,
+                  start: int, end: int) -> list[dict]:
     url = f"{DASHBOARD_URL}/api/candles"
 
-    try:
-        response = requests.get(
-            url,
-            params={
-                "symbol": symbol.upper(),
-                "resolution": resolution,
-                "start": int(start),
-                "end": int(end),
-            },
-            headers={"Accept": "application/json"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        payload = response.json()
-
-    except requests.RequestException as exc:
-        raise BacktestDataError(
-            f"Could not download {symbol} {resolution} candles: {exc}"
-        ) from exc
-
-    except ValueError as exc:
-        raise BacktestDataError(
-            "Dashboard returned invalid JSON"
-        ) from exc
+    response = requests.get(
+        url,
+        params={
+            "symbol": symbol,
+            "resolution": resolution,
+            "start": start,
+            "end": end,
+        },
+        timeout=TIMEOUT,
+        headers={"Accept": "application/json"},
+    )
+    response.raise_for_status()
+    payload = response.json()
 
     if payload.get("ok") is not True:
-        raise BacktestDataError(
-            payload.get("error", "Historical API request failed")
+        raise RuntimeError(
+            payload.get("error", "Historical data request failed")
         )
 
-    candles = payload.get("candles")
+    rows = []
+    duration = RESOLUTIONS[resolution]
 
-    if not isinstance(candles, list):
-        raise BacktestDataError(
-            "API response did not contain a candle list"
-        )
+    for c in payload.get("candles", []):
+        timestamp = int(c.get("time", c.get("timestamp", 0)))
 
-    cleaned = []
-
-    for candle in candles:
-        if not isinstance(candle, dict):
+        # Only use candles fully closed by the requested end time.
+        if timestamp <= 0 or timestamp + duration > end:
             continue
 
-        # Delta candle responses normally include time and OHLC.
-        timestamp = candle.get("time", candle.get("timestamp"))
-
-        if timestamp is None:
-            raise BacktestDataError(
-                "Candle timestamp missing; cannot safely align timeframes"
-            )
-
-        try:
-            timestamp = int(timestamp)
-            row = {
-                "time": timestamp,
-                "open": float(candle["open"]),
-                "high": float(candle["high"]),
-                "low": float(candle["low"]),
-                "close": float(candle["close"]),
-            }
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            raise BacktestDataError(
-                "Candle contains missing or invalid OHLC data"
-            ) from exc
-
-        if not all(
-            value == value and abs(value) != float("inf")
-            for value in (
-                row["open"],
-                row["high"],
-                row["low"],
-                row["close"],
-            )
-        ):
-            raise BacktestDataError("Non-finite OHLC value")
-
-        if (
-            row["high"] < max(row["open"], row["close"], row["low"])
-            or row["low"] > min(row["open"], row["close"], row["high"])
-        ):
-            raise BacktestDataError("Invalid OHLC candle")
-
-        # Exclude candles outside the requested interval.
-        if start <= timestamp < end:
-            cleaned.append(row)
-
-    cleaned.sort(key=lambda candle: candle["time"])
-
-    # Remove duplicate timestamps.
-    unique = []
-    seen = set()
-
-    for candle in cleaned:
-        if candle["time"] not in seen:
-            unique.append(candle)
-            seen.add(candle["time"])
-
-    return unique
-
-
-def align_timeframes(
-    htf: list[dict],
-    poi: list[dict],
-    entry: list[dict],
-) -> list[dict]:
-    """
-    Build entry-time rows with the latest COMPLETED HTF and POI
-    candles available at each entry timestamp.
-
-    This avoids matching unrelated rows merely by list index.
-    Input candles must contain Unix timestamps in seconds.
-    """
-
-    if not htf or not poi or not entry:
-        raise BacktestDataError("One or more timeframes contain no data")
-
-    htf = sorted(htf, key=lambda c: c["time"])
-    poi = sorted(poi, key=lambda c: c["time"])
-    entry = sorted(entry, key=lambda c: c["time"])
-
-    aligned = []
-    htf_index = 0
-    poi_index = 0
-    latest_htf = None
-    latest_poi = None
-
-    for entry_candle in entry:
-        entry_time = int(entry_candle["time"])
-
-        # A candle is usable only after its timeframe has closed.
-        while htf_index < len(htf):
-            candle = htf[htf_index]
-            close_time = candle["time"] + RESOLUTION_SECONDS["1h"]
-
-            if close_time > entry_time:
-                break
-
-            latest_htf = candle
-            htf_index += 1
-
-        while poi_index < len(poi):
-            candle = poi[poi_index]
-            close_time = candle["time"] + RESOLUTION_SECONDS["15m"]
-
-            if close_time > entry_time:
-                break
-
-            latest_poi = candle
-            poi_index += 1
-
-        if latest_htf is None or latest_poi is None:
-            continue
-
-        aligned.append({
-            "time": entry_time,
-            "htf": latest_htf,
-            "poi": latest_poi,
-            "entry": entry_candle,
+        rows.append({
+            "time": timestamp,
+            "open": float(c["open"]),
+            "high": float(c["high"]),
+            "low": float(c["low"]),
+            "close": float(c["close"]),
         })
 
-    if not aligned:
-        raise BacktestDataError(
-            "No aligned rows. Check timestamp units and data range."
+    rows.sort(key=lambda c: c["time"])
+
+    deduplicated = []
+    seen = set()
+
+    for row in rows:
+        if row["time"] not in seen:
+            deduplicated.append(row)
+            seen.add(row["time"])
+
+    if len(deduplicated) < 35:
+        raise RuntimeError(
+            f"Not enough {resolution} candles returned: "
+            f"{len(deduplicated)}"
         )
 
-    return aligned
+    return deduplicated
 
 
-def inspect_data(
-    symbol: str,
-    start: int,
-    end: int,
+def run_historical_test(
+    symbol: str = "BTCUSD",
+    days: int = 30,
 ) -> dict:
-    """Download and validate data; does not run trades."""
+    """
+    Run a historical test only.
+    All timeframes use the same UTC timestamp window.
+    """
+
+    if symbol not in ("BTCUSD", "XAUTUSD"):
+        raise ValueError(
+            "Only BTCUSD and XAUTUSD are configured. "
+            "Verify the exact Gold futures contract before using it."
+        )
+
+    if days < 2 or days > 180:
+        raise ValueError("days must be between 2 and 180")
+
+    end = int(time.time())
+    start = end - days * 86400
 
     htf = fetch_candles(symbol, "1h", start, end)
     poi = fetch_candles(symbol, "15m", start, end)
     entry = fetch_candles(symbol, "5m", start, end)
 
-    aligned = align_timeframes(htf, poi, entry)
+    # Important: engine validates timestamp presence and order.
+    # It also uses closed higher-timeframe candles for signals.
+    results = {}
+
+    for mode in ("strict", "balanced"):
+        results[mode] = run_backtest(
+            htf_candles=htf,
+            poi_candles=poi,
+            entry_candles=entry,
+            symbol=symbol,
+            mode=mode,
+        )
 
     return {
-        "symbol": symbol.upper(),
-        "start_utc": datetime.fromtimestamp(
-            start, tz=timezone.utc
-        ).isoformat(),
-        "end_utc": datetime.fromtimestamp(
-            end, tz=timezone.utc
-        ).isoformat(),
-        "candles_1h": len(htf),
-        "candles_15m": len(poi),
-        "candles_5m": len(entry),
-        "aligned_rows": len(aligned),
+        "status": "HISTORICAL_BACKTEST_COMPLETE",
+        "symbol": symbol,
+        "days_requested": days,
         "live_orders_enabled": LIVE_ORDERS_ENABLED,
-        "status": "DATA_VALIDATED_ONLY",
-        "note": (
-            "This function validates data only. It does not call "
-            "the backtest engine or place orders."
+        "candles": {
+            "1h": len(htf),
+            "15m": len(poi),
+            "5m": len(entry),
+        },
+        "results": results,
+        "warning": (
+            "Prototype only. Check the exchange's actual contract "
+            "specification, fee tier, funding and point value. "
+            "XAUTUSD is not assumed to be a Gold futures contract."
         ),
     }
 
 
 if __name__ == "__main__":
-    print(
-        "GARRY V7 backtest data runner loaded. "
-        "Call inspect_data(symbol, start, end) from a test script."
-    )
+    # Small first run. No real orders are submitted.
+    try:
+        report = run_historical_test(
+            symbol=os.getenv("BACKTEST_SYMBOL", "BTCUSD"),
+            days=int(os.getenv("BACKTEST_DAYS", "7")),
+        )
+        print(json.dumps(report, indent=2, allow_nan=False))
+    except Exception as exc:
+        print(json.dumps({
+            "status": "BACKTEST_FAILED",
+            "error": str(exc),
+            "live_orders_enabled": LIVE_ORDERS_ENABLED,
+        }, indent=2))
