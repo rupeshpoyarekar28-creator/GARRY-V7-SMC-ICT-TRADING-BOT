@@ -1,0 +1,57 @@
+
+name: GARRY V7 Historical Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Market symbol"
+        required: true
+        type: choice
+        options:
+          - BTCUSD
+      days:
+        description: "Historical test period"
+        required: true
+        default: "7"
+        type: choice
+        options:
+          - "7"
+          - "30"
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run historical backtest
+        env:
+          BACKTEST_SYMBOL: ${{ inputs.symbol }}
+          BACKTEST_DAYS: ${{ inputs.days }}
+        run: |
+          python backtest_runner.py 2>&1 | tee backtest_report.txt
+
+      - name: Save backtest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: garry-v7-backtest-report
+          path: backtest_report.txt
+          if-no-files-found: warn
