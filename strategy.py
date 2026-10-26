@@ -1,90 +1,85 @@
 
-from dataclasses import dataclass
-from typing import Optional
-
-
-@dataclass
-class Signal:
-    side: str
-    reason: str
-    close: float
-    stop_loss: Optional[float] = None
-
-
 def detect_signal(candles: list[dict]) -> dict:
     """
-    Educational market-structure prototype.
-
-    Each candle must contain:
-    open, high, low, close
-
-    Candles must be chronological and completed.
-    This prototype does not place orders.
+    Educational SMC prototype.
+    Uses completed OHLC candles only.
+    Does not place orders.
     """
-    if len(candles) < 20:
+    required = ("open", "high", "low", "close")
+
+    if not isinstance(candles, list) or len(candles) < 30:
         return {
             "signal": "WAIT",
-            "reason": "Need at least 20 completed candles"
+            "reason": "Need at least 30 completed candles"
         }
 
-    for candle in candles:
-        for key in ("open", "high", "low", "close"):
-            if key not in candle:
-                return {
-                    "signal": "WAIT",
-                    "reason": f"Missing candle field: {key}"
-                }
+    try:
+        for candle in candles:
+            for key in required:
+                value = float(candle[key])
+                if not __import__("math").isfinite(value):
+                    raise ValueError("Non-finite candle value")
 
-    # Use only candles before the latest completed candle
-    # to calculate reference high/low levels.
-    previous = candles[-21:-1]
-    current = candles[-1]
+            if float(candle["high"]) < float(candle["low"]):
+                raise ValueError("Invalid candle high/low")
 
-    swing_high = max(float(c["high"]) for c in previous)
-    swing_low = min(float(c["low"]) for c in previous)
+        data = candles[:-1]
+        current = candles[-1]
 
-    high = float(current["high"])
-    low = float(current["low"])
-    close = float(current["close"])
+        highs = [float(c["high"]) for c in data]
+        lows = [float(c["low"]) for c in data]
+        close = float(current["close"])
+        high = float(current["high"])
+        low = float(current["low"])
 
-    # Liquidity sweep followed by a close back inside range.
-    if high > swing_high and close < swing_high:
+        # Reference range from the previous 20 candles
+        reference_high = max(highs[-20:])
+        reference_low = min(lows[-20:])
+
+        # Liquidity sweep and close back inside the range
+        if high > reference_high and close < reference_high:
+            return {
+                "signal": "SELL_WATCH",
+                "reason": "Potential buy-side liquidity sweep",
+                "reference_level": reference_high,
+                "close": close
+            }
+
+        if low < reference_low and close > reference_low:
+            return {
+                "signal": "BUY_WATCH",
+                "reason": "Potential sell-side liquidity sweep",
+                "reference_level": reference_low,
+                "close": close
+            }
+
+        # Breakout confirmation
+        if close > reference_high:
+            return {
+                "signal": "BULLISH_BREAKOUT",
+                "reason": "Close above previous 20-candle high",
+                "reference_level": reference_high,
+                "close": close
+            }
+
+        if close < reference_low:
+            return {
+                "signal": "BEARISH_BREAKOUT",
+                "reason": "Close below previous 20-candle low",
+                "reference_level": reference_low,
+                "close": close
+            }
+
         return {
-            "signal": "SELL_WATCH",
-            "reason": "Potential buy-side liquidity sweep",
-            "reference_level": swing_high,
+            "signal": "WAIT",
+            "reason": "No qualifying setup",
+            "reference_high": reference_high,
+            "reference_low": reference_low,
             "close": close
         }
 
-    if low < swing_low and close > swing_low:
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
         return {
-            "signal": "BUY_WATCH",
-            "reason": "Potential sell-side liquidity sweep",
-            "reference_level": swing_low,
-            "close": close
+            "signal": "WAIT",
+            "reason": f"Invalid candle data: {exc}"
         }
-
-    # Breakout checks use closing price, not wick alone.
-    if close > swing_high:
-        return {
-            "signal": "BULLISH_BREAKOUT",
-            "reason": "Close above prior 20-candle high",
-            "reference_level": swing_high,
-            "close": close
-        }
-
-    if close < swing_low:
-        return {
-            "signal": "BEARISH_BREAKOUT",
-            "reason": "Close below prior 20-candle low",
-            "reference_level": swing_low,
-            "close": close
-        }
-
-    return {
-        "signal": "WAIT",
-        "reason": "No qualifying setup",
-        "reference_high": swing_high,
-        "reference_low": swing_low,
-        "close": close
-    }
