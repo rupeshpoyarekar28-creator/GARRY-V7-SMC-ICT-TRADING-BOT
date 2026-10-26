@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <title>GARRY V7 TRADING BOT</title>
+  <style>
+    :root { --bg:#07111f; --panel:#101d30; --panel2:#14243a; --text:#edf5ff;
+      --muted:#8fa4bd; --teal:#35d6c4; --blue:#4a9dff; --line:#20334b;
+      --amber:#ffca72; --red:#ff7777; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(ellipse at top,#112847 0%,var(--bg) 48%);
+      color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; min-height:100vh; }
+    .wrap { width:min(100%,760px); margin:auto; padding:18px 15px 32px; }
+    header { text-align:center; padding:15px 4px 22px; }
+    .brand-icon { display:inline-grid; place-items:center; width:48px; height:48px; border-radius:16px;
+      background:linear-gradient(135deg,var(--blue),var(--teal)); color:#07111f; font-size:24px; font-weight:900;
+      box-shadow:0 8px 28px #35d6c433; }
+    h1 { font-size:clamp(20px,5vw,27px); margin:12px 0 5px; letter-spacing:1.1px; }
+    .subtitle { color:var(--muted); font-size:12px; letter-spacing:1.5px; }
+    .status-row { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; margin:0 2px 12px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--amber); display:inline-block; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+    .card { background:linear-gradient(145deg,#13243a,#0e1a2b); border:1px solid var(--line);
+      border-radius:18px; padding:16px; box-shadow:0 10px 26px #00000016; min-width:0; }
+    .balance { grid-column:1/-1; position:relative; overflow:hidden; }
+    .balance:after { content:"$"; position:absolute; right:18px; top:5px; font-size:100px; font-weight:800;
+      color:#35d6c40c; pointer-events:none; }
+    .eyebrow { font-size:11px; letter-spacing:1.1px; color:var(--muted); text-transform:uppercase; }
+    .amount { font-size:36px; font-weight:800; color:var(--teal); margin:6px 0 3px; }
+    .hint { font-size:12px; color:var(--muted); }
+    .metric { font-size:18px; font-weight:700; margin-top:10px; }
+    .section-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:24px 2px 12px; }
+    h2 { font-size:15px; margin:0; letter-spacing:.4px; }
+    button { border:0; border-radius:12px; padding:11px 14px; font-weight:750; cursor:pointer; color:#061522;
+      background:linear-gradient(135deg,var(--teal),#64baff); }
+    button:disabled { opacity:.55; cursor:wait; }
+    .markets { display:grid; grid-template-columns:1fr; gap:9px; }
+    .market { display:flex; align-items:center; justify-content:space-between; gap:10px;
+      background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; }
+    .symbol { font-weight:750; overflow-wrap:anywhere; }
+    .price { color:var(--teal); font-weight:750; text-align:right; }
+    .small { color:var(--muted); font-size:11px; margin-top:4px; }
+    .feature-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .feature { border:1px solid var(--line); border-radius:14px; background:#0d1929; padding:13px; }
+    .feature .ico { font-size:20px; }
+    .feature strong { display:block; margin:7px 0 3px; font-size:13px; }
+    .feature span { font-size:11px; color:var(--muted); }
+    .notice { border:1px solid #6a512b; background:#2a2115; color:#ffdaa0; padding:13px; border-radius:13px;
+      font-size:12px; line-height:1.5; margin-top:18px; }
+    footer { text-align:center; color:#70849c; font-size:11px; padding:22px 5px 0; }
+    @media(min-width:600px) { .markets { grid-template-columns:1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <div class="brand-icon">G7</div>
+      <h1>GARRY V7 TRADING BOT</h1>
+      <div class="subtitle">SMART TRADING • RISK FIRST</div>
+    </header>
+
+    <div class="status-row"><span class="dot" id="statusDot"></span><span id="statusText">Market data not checked yet</span></div>
+
+    <section class="grid">
+      <div class="card balance">
+        <div class="eyebrow">Demo Balance</div>
+        <div class="amount">$100.00</div>
+        <div class="hint">Local demo display only · no real funds or simulated fills</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Trading mode</div>
+        <div class="metric">Demo / Read-only</div>
+        <div class="hint">Live orders disabled</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Risk status</div>
+        <div class="metric" style="color:var(--amber)">Not configured</div>
+        <div class="hint">Set limits before trading features</div>
+      </div>
+    </section>
+
+    <div class="section-head">
+      <h2>📈 LIVE MARKETS</h2>
+      <button id="refreshBtn" onclick="loadMarkets()">↻ Refresh</button>
+    </div>
+    <div class="markets" id="markets">
+      <div class="card hint">Tap Refresh to request public market data from your running app server.</div>
+    </div>
+
+    <div class="section-head"><h2>⚡ BOT MODULES</h2></div>
+    <section class="feature-grid">
+      <div class="feature"><div class="ico">🧭</div><strong>Strategy Studio</strong><span>Planned · SMC/ICT rules</span></div>
+      <div class="feature"><div class="ico">🧪</div><strong>2-Year Backtest</strong><span>Planned · historical data required</span></div>
+      <div class="feature"><div class="ico">🛡️</div><strong>Risk Manager</strong><span>Planned · limits and kill switch</span></div>
+      <div class="feature"><div class="ico">🔐</div><strong>API Security</strong><span>Live trading not connected</span></div>
+    </section>
+
+    <div class="notice"><strong>Safety notice:</strong> Prices are shown only after a successful API response. If the request fails, the dashboard reports the error rather than inventing prices. This starter does not place orders and does not guarantee any win rate.</div>
+    <footer>GARRY V7 · <span id="updatedAt">No successful market refresh yet</span><br>© <span id="year"></span></footer>
+  </main>
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+  const money = value => {
+    if (value === null || value === undefined || value === '') return 'Price unavailable';
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toLocaleString(undefined, {maximumFractionDigits: 6}) : String(value);
+  };
+  async function loadMarkets() {
+    const btn = document.getElementById('refreshBtn');
+    const list = document.getElementById('markets');
+    const status = document.getElementById('statusText');
+    const dot = document.getElementById('statusDot');
+    btn.disabled = true; btn.textContent = 'Loading…';
+    status.textContent = 'Connecting to market data…'; dot.style.background = 'var(--amber)';
+    try {
+      const response = await fetch('/api/markets', {cache:'no-store'});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Market API error');
+      list.replaceChildren();
+      if (!data.markets.length) {
+        list.innerHTML = '<div class="card hint">No instruments were returned by the exchange.</div>';
+      } else {
+        for (const item of data.markets) {
+          const price = item.mark_price ?? item.close ?? item.last_price;
+          const card = document.createElement('div');
+          card.className = 'market';
+          const left = document.createElement('div');
+          const sym = document.createElement('div'); sym.className = 'symbol'; sym.textContent = item.symbol || 'Unknown';
+          const sub = document.createElement('div'); sub.className = 'small'; sub.textContent = 'Exchange ticker';
+          left.append(sym, sub);
+          const right = document.createElement('div');
+          const p = document.createElement('div'); p.className = 'price'; p.textContent = money(price);
+          const label = document.createElement('div'); label.className = 'small'; label.textContent = 'Returned price';
+          right.append(p, label); card.append(left, right); list.append(card);
+        }
+      }
+      status.textContent = 'Connected · ' + new Date(data.updated_at).toLocaleTimeString();
+      dot.style.background = 'var(--teal)';
+      document.getElementById('updatedAt').textContent = 'Last successful update: ' + new Date(data.updated_at).toLocaleString();
+    } catch (err) {
+      list.replaceChildren();
+      const error = document.createElement('div'); error.className = 'card hint';
+      error.textContent = 'Market data unavailable: ' + err.message + ' Please check the server and internet connection, then refresh.';
+      list.append(error);
+      status.textContent = 'Market data unavailable'; dot.style.background = 'var(--red)';
+    } finally {
+      btn.disabled = false; btn.textContent = '↻ Refresh';
+    }
+  }
+</script>
+</body>
+</html>
