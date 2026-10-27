@@ -8,6 +8,11 @@ from typing import Any
 from ict_strategy import detect_ict_signal
 
 
+# ============================================================
+# GARRY V7 - HISTORICAL BACKTEST ENGINE
+# Historical testing only. No exchange orders are placed.
+# ============================================================
+
 LIVE_ORDERS_ENABLED = False
 
 TIMEFRAME_SECONDS = {
@@ -67,17 +72,14 @@ def _validate(candles: list[dict], name: str) -> list[dict]:
             raise ValueError(f"{name}[{i}] must be a dictionary")
 
         if "time" not in candle:
-            raise ValueError(
-                f"{name}[{i}] is missing 'time'; "
-                "timestamp alignment is mandatory"
-            )
+            raise ValueError(f"{name}[{i}] is missing time")
 
         timestamp = int(_number(candle["time"], "time"))
 
-        # This engine expects Unix timestamps in seconds.
-        if timestamp < 1_000_000_000 or timestamp > 9_999_999_999:
+        # Unix seconds are expected, not milliseconds.
+        if not 1_000_000_000 <= timestamp <= 9_999_999_999:
             raise ValueError(
-                "Candle time must be a Unix timestamp in seconds"
+                f"{name}[{i}] time must be Unix seconds"
             )
 
         row = {
@@ -96,8 +98,7 @@ def _validate(candles: list[dict], name: str) -> list[dict]:
 
         if previous_time is not None and timestamp <= previous_time:
             raise ValueError(
-                f"{name} timestamps must be strictly increasing "
-                "with no duplicates"
+                f"{name} times must be strictly increasing"
             )
 
         previous_time = timestamp
@@ -111,9 +112,8 @@ def _closed_before(
     timeframe: str,
     signal_time: int,
 ) -> list[dict]:
-    """Only expose candles that closed by signal_time."""
+    """Only return candles that have closed by signal_time."""
     duration = TIMEFRAME_SECONDS[timeframe]
-
     return [
         candle for candle in candles
         if candle["time"] + duration <= signal_time
@@ -145,20 +145,20 @@ def run_backtest(
     """
     Historical-only backtest.
 
-    All candle lists must be oldest-first and contain:
-    time (Unix seconds), open, high, low, close.
+    HTF: 1H
+    POI: 15M
+    Entry: 5M
 
-    HTF = 1H; POI = 15M; entry = 5M.
-    Signal is evaluated after a 5M candle closes.
-    Entry occurs at the next 5M candle open.
+    Signals are evaluated after each completed 5M candle.
+    Entries are at the next candle open.
+    If TP and SL touch in the same candle, SL is assumed first.
 
-    If TP and SL both touch in one candle, SL is assumed first.
-    Open positions at the end remain open and are reported.
+    Diagnostics show why signals are rejected.
     This function never places exchange orders.
     """
 
     if mode not in ("strict", "balanced"):
-        raise ValueError("mode must be 'strict' or 'balanced'")
+        raise ValueError("mode must be strict or balanced")
 
     config = DEFAULT_SETTINGS.copy()
     if settings:
@@ -171,13 +171,13 @@ def run_backtest(
         raise ValueError("initial_balance must be positive")
 
     if config["position_size"] <= 0 or config["point_value"] <= 0:
-        raise ValueError("position_size and point_value must be positive")
+        raise ValueError("Position size and point value must be positive")
 
     if config["take_profit_points"] <= 0:
-        raise ValueError("take_profit_points must be positive")
+        raise ValueError("Take profit must be positive")
 
     if config["stop_loss_points"] <= 0:
-        raise ValueError("stop_loss_points must be positive")
+        raise ValueError("Stop loss must be positive")
 
     if config["fee_rate"] < 0 or config["slippage_points"] < 0:
         raise ValueError("Fees and slippage cannot be negative")
@@ -188,8 +188,7 @@ def run_backtest(
 
     if len(htf) < 30 or len(poi) < 25 or len(entry) < 31:
         raise ValueError(
-            "Insufficient data: need at least 30 1H, "
-            "25 15M and 31 5M candles"
+            "Need at least 30 1H, 25 15M and 31 5M candles"
         )
 
     balance = config["initial_balance"]
@@ -197,13 +196,22 @@ def run_backtest(
     trades: list[Trade] = []
     position = None
 
+    diagnostics = {
+        "candles_checked": 0,
+        "wait_signals": 0,
+        "buy_signals": 0,
+        "sell_signals": 0,
+        "reasons": {},
+        "samples": [],
+    }
+
     for i in range(len(entry) - 1):
         candle = entry[i]
-        candle_close_time = (
-            candle["time"] + TIMEFRAME_SECONDS["5m"]
-        )
+        candle_close_time = candle["time"] + TIMEFRAME_SECONDS["5m"]
 
-        # Manage any open position using this completed candle.
+        # ----------------------------------------------------
+        # 1. Manage existing position using completed candle.
+        # ----------------------------------------------------
         if position is not None:
             side = position["side"]
             sl = position["sl"]
@@ -217,15 +225,14 @@ def run_backtest(
                 hit_tp = candle["low"] <= tp
 
             if hit_sl or hit_tp:
-                # Conservative same-candle assumption: SL first.
                 reason = "SL" if hit_sl else "TP"
                 raw_exit = sl if hit_sl else tp
+                slip = config["slippage_points"]
 
-                # Adverse exit slippage is applied once.
                 exit_price = (
-                    raw_exit - config["slippage_points"]
+                    raw_exit - slip
                     if side == "BUY"
-                    else raw_exit + config["slippage_points"]
+                    else raw_exit + slip
                 )
 
                 direction = 1.0 if side == "BUY" else -1.0
@@ -237,14 +244,13 @@ def run_backtest(
                     * direction * size * multiplier
                 )
 
-                # Fees are estimated on entry/exit notional.
+                # Approximation only; exchange contract rules may differ.
                 fees = (
                     abs(position["entry"]) + abs(exit_price)
                 ) * size * multiplier * config["fee_rate"]
 
                 slippage_cost = (
-                    position["entry_slippage"]
-                    + config["slippage_points"]
+                    position["entry_slippage"] + slip
                 ) * size * multiplier
 
                 net = gross - fees
@@ -270,18 +276,20 @@ def run_backtest(
                 equity_curve.append(balance)
                 position = None
 
+        # Never open another trade while a position remains open.
         if position is not None:
             continue
 
-        # Strategy only receives candles that have fully closed
-        # by the signal timestamp. Timeframes are sliced separately.
+        # ----------------------------------------------------
+        # 2. Build timeframe-aligned data available at this time.
+        # ----------------------------------------------------
         htf_available = _closed_before(
             htf, "1h", candle_close_time
         )
         poi_available = _closed_before(
             poi, "15m", candle_close_time
         )
-        entry_available = entry[: i + 1]
+        entry_available = entry[:i + 1]
 
         if (
             len(htf_available) < 30
@@ -290,7 +298,9 @@ def run_backtest(
         ):
             continue
 
-        # ict_strategy expects OHLC keys; time can safely be omitted.
+        diagnostics["candles_checked"] += 1
+
+        # Strategy uses OHLC data; timestamps were used for alignment.
         signal = detect_ict_signal(
             htf_candles=[
                 {k: c[k] for k in ("open", "high", "low", "close")}
@@ -308,13 +318,41 @@ def run_backtest(
             symbol=symbol,
         )
 
-        # Entry at the next candle's open, not the signal candle.
+        signal_type = signal.get("signal", "WAIT")
+        reason = signal.get("reason", "No reason supplied")
+
+        # ----------------------------------------------------
+        # 3. Diagnostics: record why the strategy waits.
+        # ----------------------------------------------------
+        if signal_type == "WAIT":
+            diagnostics["wait_signals"] += 1
+            diagnostics["reasons"][reason] = (
+                diagnostics["reasons"].get(reason, 0) + 1
+            )
+
+            if len(diagnostics["samples"]) < 12:
+                diagnostics["samples"].append({
+                    "time": candle_close_time,
+                    "signal": signal_type,
+                    "reason": reason,
+                    "bias_1h": signal.get("bias_1h"),
+                    "sweep_15m": signal.get("sweep_15m"),
+                    "structure_5m": signal.get("structure_5m"),
+                    "fvg_5m": signal.get("fvg_5m"),
+                    "displacement": signal.get("displacement"),
+                })
+
+        # ----------------------------------------------------
+        # 4. Enter at the next candle open after the signal.
+        # ----------------------------------------------------
         next_candle = entry[i + 1]
         next_open = next_candle["open"]
         slip = config["slippage_points"]
 
-        if signal.get("signal") == "BUY_WATCH":
+        if signal_type == "BUY_WATCH":
+            diagnostics["buy_signals"] += 1
             entry_price = next_open + slip
+
             position = {
                 "side": "BUY",
                 "entry": entry_price,
@@ -324,8 +362,10 @@ def run_backtest(
                 "entry_slippage": slip,
             }
 
-        elif signal.get("signal") == "SELL_WATCH":
+        elif signal_type == "SELL_WATCH":
+            diagnostics["sell_signals"] += 1
             entry_price = next_open - slip
+
             position = {
                 "side": "SELL",
                 "entry": entry_price,
@@ -335,19 +375,27 @@ def run_backtest(
                 "entry_slippage": slip,
             }
 
+    # --------------------------------------------------------
+    # 5. Calculate closed-trade statistics.
+    # --------------------------------------------------------
     wins = sum(t.net_pnl > 0 for t in trades)
     losses = sum(t.net_pnl <= 0 for t in trades)
     net_pnl = sum(t.net_pnl for t in trades)
+
     total_fees = sum(t.fees for t in trades)
     total_slippage = sum(t.slippage_cost for t in trades)
 
-    gross_profit = sum(t.net_pnl for t in trades if t.net_pnl > 0)
-    gross_loss = abs(sum(t.net_pnl for t in trades if t.net_pnl < 0))
+    gross_profit = sum(
+        t.net_pnl for t in trades if t.net_pnl > 0
+    )
+    gross_loss = abs(sum(
+        t.net_pnl for t in trades if t.net_pnl < 0
+    ))
 
-    if gross_loss:
+    if gross_loss > 0:
         profit_factor = gross_profit / gross_loss
-    elif gross_profit:
-        profit_factor = None  # Infinite; no losing trades in sample.
+    elif gross_profit > 0:
+        profit_factor = None
     else:
         profit_factor = 0.0
 
@@ -373,14 +421,18 @@ def run_backtest(
             wins / len(trades) * 100 if trades else 0.0
         ),
         "profit_factor": profit_factor,
-        "max_drawdown_closed_trades_only": _max_drawdown(equity_curve),
+        "max_drawdown_closed_trades_only": _max_drawdown(
+            equity_curve
+        ),
         "total_fees": total_fees,
         "estimated_slippage_cost": total_slippage,
         "open_position_at_end": position,
         "trades": [asdict(t) for t in trades],
+        "diagnostics": diagnostics,
         "warning": (
-            "Prototype. Confirm exchange timestamp units, product "
-            "multiplier, fee tier, funding and candle quality. "
-            "Drawdown uses closed trades only and excludes unrealized P&L."
+            "Prototype only. Check exchange contract multiplier, "
+            "fees, funding and candle quality. Fees are approximate. "
+            "Open-position unrealized P&L is excluded. "
+            "This engine never places live orders."
         ),
     }
