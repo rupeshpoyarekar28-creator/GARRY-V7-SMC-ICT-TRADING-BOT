@@ -1,13 +1,15 @@
+
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request
 import requests
 import re
 import time
+import logging
 
 app = Flask(__name__)
 
 DELTA_API = "https://api.india.delta.exchange"
-TIMEOUT_SECONDS = 12
+TIMEOUT_SECONDS = 15
 
 CONTRACT_TYPES = (
     "futures",
@@ -15,9 +17,9 @@ CONTRACT_TYPES = (
 )
 
 SESSION = requests.Session()
-SESSION.headers.update({
-    "Accept": "application/json"
-})
+SESSION.headers.update({"Accept": "application/json"})
+
+logging.basicConfig(level=logging.INFO)
 
 
 def delta_get(path, params=None):
@@ -33,7 +35,9 @@ def delta_get(path, params=None):
     payload = response.json()
 
     if payload.get("success") is not True:
-        raise ValueError("Delta API error")
+        raise ValueError(
+            f"Delta API error: {payload.get('error')}"
+        )
 
     return payload
 
@@ -44,7 +48,7 @@ def get_all_active_products():
     after = None
     seen = set()
 
-    for _ in range(30):
+    for _ in range(100):
 
         params = {
             "contract_types": ",".join(CONTRACT_TYPES),
@@ -67,13 +71,17 @@ def get_all_active_products():
 
         for product in page:
 
-            if (
-                isinstance(product, dict)
-                and product.get("state") == "live"
-                and product.get("product_type") in CONTRACT_TYPES
-                and product.get("symbol")
-            ):
+            if not isinstance(product, dict):
+                continue
 
+            # Delta product field is contract_type
+            if product.get("state") != "live":
+                continue
+
+            if product.get("contract_type") not in CONTRACT_TYPES:
+                continue
+
+            if product.get("symbol"):
                 products.append(product)
 
         cursor = (payload.get("meta") or {}).get("after")
@@ -106,16 +114,18 @@ def markets():
 
     try:
 
+        # Fetch all active Futures and Perpetual products
         products = get_all_active_products()
 
-        payload = delta_get(
+        # Fetch live tickers
+        ticker_payload = delta_get(
             "/v2/tickers",
             params={
                 "contract_types": ",".join(CONTRACT_TYPES)
             }
         )
 
-        tickers = payload.get("result", [])
+        tickers = ticker_payload.get("result", [])
 
         if not isinstance(tickers, list):
             raise ValueError("Invalid ticker response")
@@ -140,11 +150,13 @@ def markets():
 
                 "product_id": product.get("id"),
 
-                "contract_type": product.get("product_type"),
+                "contract_type": product.get("contract_type"),
 
                 "underlying_asset": product.get("underlying_asset"),
 
                 "state": product.get("state"),
+
+                "trading_status": product.get("trading_status"),
 
                 "mark_price": ticker.get("mark_price"),
 
@@ -156,7 +168,11 @@ def markets():
 
                 "turnover": ticker.get("turnover"),
 
-                "open_interest": ticker.get("open_interest")
+                "open_interest": ticker.get("open_interest"),
+
+                "high": ticker.get("high"),
+
+                "low": ticker.get("low")
 
             })
 
@@ -201,7 +217,9 @@ def markets():
 
     except requests.RequestException:
 
-        app.logger.exception("Delta API connection error")
+        app.logger.exception(
+            "Delta API connection error"
+        )
 
         return jsonify({
             "ok": False,
@@ -210,7 +228,9 @@ def markets():
 
     except (ValueError, TypeError, KeyError):
 
-        app.logger.exception("Market data processing error")
+        app.logger.exception(
+            "Market data processing error"
+        )
 
         return jsonify({
             "ok": False,
@@ -238,12 +258,14 @@ def historical_candles():
     }
 
     if not re.fullmatch(r"[A-Z0-9-]{2,40}", symbol):
+
         return jsonify({
             "ok": False,
             "error": "Invalid symbol"
         }), 400
 
     if resolution not in allowed:
+
         return jsonify({
             "ok": False,
             "error": "Invalid resolution"
