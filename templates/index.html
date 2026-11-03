@@ -1,20 +1,646 @@
-<!doctype html>
+
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#090d16">
-<title>GARRY V7 | Trading Workspace</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#090d16">
+
+<title>GARRY V7 Trading Workspace</title>
+
 <style>
-:root{color-scheme:dark;--bg:#090d16;--panel:#111827;--line:#273449;--text:#edf3fb;--muted:#93a2b8;--teal:#41e0c0;--blue:#72a7ff;--amber:#f5c46a;--red:#ff7c8b}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 45% -15%,#1b3550 0,transparent 44%),var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}button{font:inherit;cursor:pointer}.app{max-width:1440px;margin:auto;padding:18px 22px 36px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 0 22px;border-bottom:1px solid #ffffff12}.brand{display:flex;align-items:center;gap:12px}.logo{width:45px;height:45px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(140deg,var(--blue),var(--teal));color:#06131b;font-weight:950;font-size:17px}h1{font-size:18px;letter-spacing:1.3px;margin:0}.tagline{font-size:11px;color:var(--muted);margin-top:4px;letter-spacing:1.2px}.top-actions{display:flex;align-items:center;gap:9px}.pill{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;white-space:nowrap}.dot{width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block}.mode{color:var(--teal);border-color:#41e0c044;background:#41e0c00d}.layout{display:grid;grid-template-columns:205px minmax(0,1fr);gap:22px;padding-top:22px}.side{border-right:1px solid #ffffff10;padding-right:16px}.nav-title{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#64758c;padding:10px 12px}.nav{display:grid;gap:6px}.nav a{color:var(--muted);text-decoration:none;padding:12px;border-radius:12px;font-size:13px;display:flex;align-items:center;gap:10px}.nav a.active{color:var(--text);background:linear-gradient(100deg,#2b5062aa,#182a3b);border:1px solid #41e0c025}.nav a span:first-child{font-size:16px;width:20px;text-align:center}.side-note{margin-top:26px;padding:13px;border-radius:13px;border:1px solid var(--line);background:#0e1522;font-size:11px;line-height:1.6;color:var(--muted)}.side-note strong{color:var(--teal);display:block;margin-bottom:4px}.welcome{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;margin:0 0 18px}.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:1.7px;color:var(--teal);font-weight:750}.welcome h2{font-size:25px;margin:7px 0 5px;letter-spacing:-.6px}.welcome p{color:var(--muted);font-size:12px;margin:0;line-height:1.6}.btn{border:1px solid #3c526b;border-radius:11px;padding:10px 13px;background:#18263a;color:var(--text);font-size:12px;font-weight:700}.btn.primary{background:linear-gradient(120deg,var(--teal),#83d9ff);border:0;color:#07151b}.btn:disabled{opacity:.6}.grid{display:grid;gap:13px}.stats{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:17px}.card{background:linear-gradient(150deg,#141e2e,#101724);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0;box-shadow:0 10px 35px #00000012}.stat-top{display:flex;justify-content:space-between;gap:8px;align-items:center;color:var(--muted);font-size:11px}.stat-icon{width:31px;height:31px;border-radius:10px;display:grid;place-items:center;background:#223348;color:var(--teal);font-size:15px}.stat-value{font-size:24px;font-weight:800;letter-spacing:-.5px;margin:14px 0 6px}.stat-foot{font-size:10px;color:var(--muted)}.accent{color:var(--teal)}.amber{color:var(--amber)}.main-grid{grid-template-columns:minmax(0,1.4fr) minmax(280px,.9fr);align-items:start}.section{margin-bottom:15px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 1px 11px}.section-head h3{font-size:14px;margin:0}.section-head small{font-size:10px;color:var(--muted)}.market-list{display:grid;gap:8px}.market{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:13px;border:1px solid #273449;border-radius:13px;background:#0d1420}.market-name{font-size:12px;font-weight:750;overflow-wrap:anywhere}.market-sub{font-size:10px;color:var(--muted);margin-top:4px}.market-price{text-align:right;font-weight:800;font-size:13px;color:var(--teal)}.error{font-size:12px;color:var(--amber);line-height:1.6}.empty{color:var(--muted);font-size:12px;line-height:1.6}.modules{grid-template-columns:repeat(2,minmax(0,1fr))}.module{padding:15px;border-radius:14px;background:#0d1420;border:1px solid #273449;min-height:124px}.module-icon{font-size:19px}.module h4{font-size:12px;margin:10px 0 5px}.module p{font-size:10px;line-height:1.5;color:var(--muted);margin:0}.module-status{display:inline-block;margin-top:10px;font-size:9px;color:var(--amber);border:1px solid #8a6a2e55;background:#f5c46a0c;border-radius:999px;padding:4px 7px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:11px;white-space:nowrap}th{text-align:left;color:#8293a9;font-weight:600;padding:10px;border-bottom:1px solid var(--line)}td{padding:12px 10px;border-bottom:1px solid #ffffff0a}td:first-child{font-weight:700}.safe-box{border:1px solid #28776577;background:linear-gradient(120deg,#10362f66,#10231f66);border-radius:14px;padding:14px;display:flex;gap:11px;align-items:flex-start}.safe-box .shield{font-size:20px}.safe-box strong{font-size:12px;display:block;margin-bottom:4px}.safe-box p{margin:0;color:var(--muted);font-size:10px;line-height:1.6}.footer{color:#687990;font-size:10px;text-align:center;padding:20px 0 0}@media(max-width:980px){.layout{grid-template-columns:1fr}.side{border:0;padding:0}.nav-title,.side-note{display:none}.nav{display:flex;overflow:auto;padding-bottom:8px}.nav a{white-space:nowrap;flex:0 0 auto;padding:10px 12px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.main-grid{grid-template-columns:1fr}.welcome h2{font-size:22px}}@media(max-width:520px){.app{padding:12px 12px 26px}.topbar{align-items:flex-start;padding-bottom:15px}.logo{width:39px;height:39px;border-radius:12px}.brand{gap:9px}h1{font-size:14px}.tagline{font-size:9px;letter-spacing:.7px}.top-actions{align-items:flex-end;flex-direction:column;gap:6px}.pill{font-size:9px;padding:6px 8px}.layout{gap:12px;padding-top:13px}.nav{gap:4px}.nav a{font-size:11px;padding:9px}.welcome{align-items:flex-start;flex-direction:column}.welcome h2{font-size:21px}.stats{gap:9px}.card{padding:13px}.stat-value{font-size:21px}.stat-top{font-size:10px}.modules{gap:8px}.module{padding:12px;min-height:126px}}
-</style></head><body><div class="app">
-<header class="topbar"><div class="brand"><div class="logo">G7</div><div><h1>GARRY V7</h1><div class="tagline">SMART TRADING WORKSPACE</div></div></div><div class="top-actions"><span class="pill"><i class="dot" id="statusDot"></i><span id="statusText">Market data not checked</span></span><span class="pill mode">● PAPER / READ-ONLY</span></div></header>
-<div class="layout"><aside class="side"><div class="nav-title">Workspace</div><nav class="nav"><a class="active" href="#overview"><span>⌂</span>Overview</a><a href="#markets"><span>⌁</span>Markets</a><a href="#modules"><span>◈</span>Strategy modules</a><a href="#backtesting"><span>▦</span>Backtesting</a><a href="#risk"><span>⛨</span>Risk &amp; safety</a></nav><div class="side-note"><strong>● Safety mode enabled</strong>Public market data only. No exchange orders, no private API keys, and no live trading.</div></aside>
-<main id="overview"><section class="welcome"><div><div class="eyebrow">Command centre / V7</div><h2>Your trading workspace</h2><p>One clean base for market monitoring, strategy research and risk-first testing.</p></div><button class="btn primary" id="refreshBtn" onclick="loadMarkets()">↻ Refresh markets</button></section>
-<section class="grid stats"><div class="card"><div class="stat-top">Demo balance <span class="stat-icon">$</span></div><div class="stat-value">$100.00</div><div class="stat-foot">Display only · not exchange funds</div></div><div class="card"><div class="stat-top">Market feed <span class="stat-icon">⌁</span></div><div class="stat-value" id="marketCount">—</div><div class="stat-foot" id="marketCountFoot">Waiting for successful response</div></div><div class="card"><div class="stat-top">Live orders <span class="stat-icon">⛨</span></div><div class="stat-value accent">OFF</div><div class="stat-foot">No order-placement code enabled</div></div><div class="card"><div class="stat-top">Strategy status <span class="stat-icon">◈</span></div><div class="stat-value amber">Research</div><div class="stat-foot">No performance claims made</div></div></section>
-<div class="grid main-grid"><div><section class="section" id="markets"><div class="section-head"><h3>Live market watch</h3><small id="updatedAt">No successful update yet</small></div><div class="card"><div class="market-list" id="marketsList"><div class="empty">Tap “Refresh markets” to request public ticker data from the configured server. Prices appear only after a successful API response.</div></div></div></section>
-<section class="section" id="backtesting"><div class="section-head"><h3>Backtesting workspace</h3><small>Historical simulation only</small></div><div class="card"><div class="table-wrap"><table><thead><tr><th>Component</th><th>Current status</th><th>Purpose</th></tr></thead><tbody><tr><td>Historical candles</td><td class="accent">API endpoint present</td><td>Request OHLC data</td></tr><tr><td>Backtest runner</td><td class="amber">Separate workflow</td><td>Run historical simulation</td></tr><tr><td>Gold validation</td><td class="amber">Needs verification</td><td>Confirm supported contract</td></tr></tbody></table></div><p class="empty" style="margin:12px 0 0">Backtesting is not live market monitoring. Results need realistic fees, slippage, contract sizing and enough historical data before drawing conclusions.</p></div></section></div>
-<div><section class="section" id="modules"><div class="section-head"><h3>Strategy modules</h3><small>Planned in stages</small></div><div class="grid modules"><div class="module"><div class="module-icon">🧭</div><h4>SMC / ICT Core</h4><p>Market structure, BOS/CHOCH, liquidity and POI logic.</p><span class="module-status">Core foundation</span></div><div class="module"><div class="module-icon">🧪</div><h4>Historical backtest</h4><p>Trades, win rate, net P&amp;L, drawdown and costs.</p><span class="module-status">Validation needed</span></div><div class="module"><div class="module-icon">📊</div><h4>Intraday</h4><p>Dedicated setup and session rules to be added later.</p><span class="module-status">Planned</span></div><div class="module"><div class="module-icon">🌊</div><h4>Swing trading</h4><p>Higher-timeframe bias and position management.</p><span class="module-status">Planned</span></div><div class="module"><div class="module-icon">⚡</div><h4>Scalping</h4><p>Lower-timeframe entries with strict risk controls.</p><span class="module-status">Planned</span></div><div class="module"><div class="module-icon">🛡️</div><h4>Risk manager</h4><p>Trade limits, loss limits and safety lockout.</p><span class="module-status">Design next</span></div></div></section>
-<section class="section" id="risk"><div class="section-head"><h3>Safety &amp; system status</h3></div><div class="safe-box"><div class="shield">🛡️</div><div><strong>Read-only mode remains active</strong><p>This dashboard does not place trades. Do not add exchange secrets to browser code. Strategy modules remain research/planned until tested and reviewed.</p></div></div></section></div></div><footer class="footer">GARRY V7 · Built for research first · <span id="year"></span></footer></main></div></div>
+:root {
+    color-scheme: dark;
+    --bg: #090d16;
+    --panel: #121c2b;
+    --line: #29384d;
+    --text: #edf3fb;
+    --muted: #93a2b8;
+    --green: #41e0c0;
+    --blue: #72a7ff;
+    --red: #ff7c8b;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Arial, sans-serif;
+}
+
+.container {
+    max-width: 1250px;
+    margin: auto;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.logo {
+    font-size: 23px;
+    font-weight: 900;
+    color: var(--green);
+}
+
+.subtitle {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 5px;
+    letter-spacing: 1px;
+}
+
+.status {
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--green);
+}
+
+h2 {
+    font-size: 22px;
+    margin: 24px 0 6px;
+}
+
+.description {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+}
+
+.card-label {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.card-value {
+    font-size: 25px;
+    font-weight: bold;
+    margin-top: 10px;
+    color: var(--green);
+}
+
+.controls {
+    display: grid;
+    grid-template-columns: 1fr 180px 180px;
+    gap: 10px;
+    margin: 18px 0;
+}
+
+input, select, button {
+    width: 100%;
+    padding: 12px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: #101a29;
+    color: var(--text);
+    font-size: 13px;
+}
+
+button {
+    background: var(--green);
+    color: #07151b;
+    font-weight: bold;
+    border: 0;
+    cursor: pointer;
+}
+
+.table-box {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+}
+
+table {
+    width: 100%;
+    min-width: 700px;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+th {
+    background: #19273a;
+    color: var(--muted);
+    text-align: left;
+    padding: 14px 12px;
+    position: sticky;
+    top: 0;
+}
+
+td {
+    padding: 13px 12px;
+    border-top: 1px solid #ffffff0d;
+}
+
+.symbol {
+    font-weight: bold;
+    color: var(--blue);
+}
+
+.price {
+    color: var(--green);
+    font-weight: bold;
+}
+
+.type {
+    font-size: 10px;
+    color: var(--green);
+    background: #173b35;
+    padding: 5px 8px;
+    border-radius: 10px;
+}
+
+.message {
+    padding: 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 10px;
+    padding: 22px;
+}
+
+.safety {
+    border: 1px solid #26735e;
+    background: #102b25;
+    padding: 13px;
+    border-radius: 10px;
+    font-size: 11px;
+    color: var(--green);
+    margin-top: 18px;
+}
+
+@media(max-width:650px) {
+    body {
+        padding: 11px;
+    }
+
+    .cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .controls {
+        grid-template-columns: 1fr;
+    }
+
+    h2 {
+        font-size: 19px;
+    }
+
+    .card-value {
+        font-size: 21px;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<header>
+    <div>
+        <div class="logo">GARRY V7</div>
+        <div class="subtitle">
+            SMART TRADING WORKSPACE
+        </div>
+    </div>
+
+    <div class="status" id="connectionStatus">
+        ● CONNECTING
+    </div>
+</header>
+
+<h2>Live Market Dashboard</h2>
+
+<div class="description">
+    Delta Exchange India · Active Futures and Perpetual Futures
+</div>
+
+<div class="cards">
+
+    <div class="card">
+        <div class="card-label">Total Active Pairs</div>
+        <div class="card-value" id="totalPairs">—</div>
+    </div>
+
+    <div class="card">
+        <div class="card-label">Pairs With Ticker</div>
+        <div class="card-value" id="tickerPairs">—</div>
+    </div>
+
+    <div class="card">
+        <div class="card-label">Displayed Pairs</div>
+        <div class="card-value" id="displayedPairs">—</div>
+    </div>
+
+</div>
+
+<div class="controls">
+
+    <input
+        type="search"
+        id="searchInput"
+        placeholder="Search symbol e.g. BTC, ETH, GOLD"
+    >
+
+    <select id="typeFilter">
+        <option value="all">All Contract Types</option>
+        <option value="perpetual_futures">
+            Perpetual Futures
+        </option>
+        <option value="futures">
+            Futures
+        </option>
+    </select>
+
+    <select id="sortFilter">
+        <option value="symbol">Sort: Symbol A-Z</option>
+        <option value="volume">Sort: Volume High-Low</option>
+        <option value="price">Sort: Price High-Low</option>
+    </select>
+
+</div>
+
+<div class="controls">
+    <button onclick="loadMarkets()">
+        ↻ REFRESH MARKETS
+    </button>
+</div>
+
+<div class="description" id="lastUpdated">
+    Waiting for market data...
+</div>
+
+<div class="table-box">
+
+<table>
+
+<thead>
+<tr>
+    <th>#</th>
+    <th>Symbol</th>
+    <th>Contract</th>
+    <th>Mark Price</th>
+    <th>24H Volume</th>
+    <th>Turnover</th>
+    <th>Status</th>
+</tr>
+</thead>
+
+<tbody id="marketTable">
+
+<tr>
+    <td colspan="7" class="message">
+        Loading Delta Exchange markets...
+    </td>
+</tr>
+
+</tbody>
+
+</table>
+
+</div>
+
+<div class="safety">
+    SECURITY MODE: READ ONLY · LIVE ORDERS OFF
+    <br><br>
+    This dashboard displays public exchange market data.
+    No automatic trades or exchange orders are enabled.
+</div>
+
+<div class="footer">
+    GARRY V7 · MARKET RESEARCH SYSTEM
+</div>
+
+</div>
+
 <script>
-document.getElementById('year').textContent=new Date().getFullYear();const fmt=value=>{if(value===null||value===undefined||value==='')return 'Unavailable';const n=Number(value);return Number.isFinite(n)?n.toLocaleString(undefined,{maximumFractionDigits:8}):String(value)};
-async function loadMarkets(){const btn=document.getElementById('refreshBtn'),list=document.getElementById('marketsList'),status=document.getElementById('statusText'),dot=document.getElementById('statusDot');btn.disabled=true;btn.textContent='Loading…';status.textContent='Connecting';dot.style.background='var(--amber)';try{const response=await fetch('/api/markets',{cache:'no-store'});const data=await response.json();if(!response.ok||data.ok!==true)throw new Error(data.error||'Market API request failed');list.replaceChildren();const markets=Array.isArray(data.markets)?data.markets:[];if(!markets.length){const e=document.createElement('div');e.className='empty';e.textContent='The exchange returned no matching instruments.';list.append(e)}for(const item of markets){const row=document.createElement('div');row.className='market';const left=document.createElement('div'),name=document.createElement('div'),sub=document.createElement('div');name.className='market-name';name.textContent=item.symbol||'Unknown';sub.className='market-sub';sub.textContent='Public exchange ticker';left.append(name,sub);const right=document.createElement('div'),price=document.createElement('div'),label=document.createElement('div');price.className='market-price';price.textContent=fmt(item.mark_price??item.close??item.last_price);label.className='market-sub';label.textContent='Returned price';right.append(price,label);row.append(left,right);list.append(row)}status.textContent='Connected';dot.style.background='var(--teal)';document.getElementById('marketCount').textContent=String(markets.length);document.getElementById('marketCountFoot').textContent='Instruments returned by API';document.getElementById('updatedAt').textContent='Updated '+new Date(data.updated_at).toLocaleTimeString()}catch(err){list.replaceChildren();const e=document.createElement('div');e.className='error';e.textContent='Market data unavailable: '+err.message+'. Check that the server is running, then refresh.';list.append(e);status.textContent='Feed unavailable';dot.style.background='var(--red)';document.getElementById('marketCount').textContent='—';document.getElementById('marketCountFoot').textContent='No successful response'}finally{btn.disabled=false;btn.textContent='↻ Refresh markets'}}
-</script></body></html>
+
+let allMarkets = [];
+
+function numberValue(value) {
+
+    if (value === null || value === undefined || value === "") {
+        return 0;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number) ? number : 0;
+}
+
+
+function formatNumber(value) {
+
+    if (value === null || value === undefined || value === "") {
+        return "—";
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return "—";
+    }
+
+    return number.toLocaleString(
+        "en-US",
+        {
+            maximumFractionDigits: 8
+        }
+    );
+}
+
+
+function escapeHTML(value) {
+
+    return String(value ?? "").replace(
+        /[&<>"']/g,
+        character => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        })[character]
+    );
+}
+
+
+function renderMarkets() {
+
+    const search = document
+        .getElementById("searchInput")
+        .value
+        .trim()
+        .toUpperCase();
+
+    const type = document
+        .getElementById("typeFilter")
+        .value;
+
+    const sort = document
+        .getElementById("sortFilter")
+        .value;
+
+    let filtered = allMarkets.filter(item => {
+
+        const symbol = String(
+            item.symbol || ""
+        ).toUpperCase();
+
+        const contract = String(
+            item.contract_type || ""
+        ).toLowerCase();
+
+        const matchesSearch = symbol.includes(search);
+
+        const matchesType =
+            type === "all" || contract === type;
+
+        return matchesSearch && matchesType;
+
+    });
+
+
+    if (sort === "volume") {
+
+        filtered.sort(
+            (a, b) =>
+                numberValue(b.volume) -
+                numberValue(a.volume)
+        );
+
+    } else if (sort === "price") {
+
+        filtered.sort(
+            (a, b) =>
+                numberValue(b.mark_price) -
+                numberValue(a.mark_price)
+        );
+
+    } else {
+
+        filtered.sort(
+            (a, b) =>
+                String(a.symbol).localeCompare(
+                    String(b.symbol)
+                )
+        );
+
+    }
+
+
+    const table = document.getElementById(
+        "marketTable"
+    );
+
+    document.getElementById(
+        "displayedPairs"
+    ).textContent = filtered.length;
+
+
+    if (filtered.length === 0) {
+
+        table.innerHTML = `
+            <tr>
+                <td colspan="7" class="message">
+                    No matching markets found.
+                </td>
+            </tr>
+        `;
+
+        return;
+    }
+
+
+    table.innerHTML = filtered.map(
+        (item, index) => {
+
+            const contract = String(
+                item.contract_type || "unknown"
+            ).replaceAll("_", " ");
+
+            const price =
+                item.mark_price ??
+                item.close ??
+                item.last_price;
+
+            return `
+                <tr>
+
+                    <td>${index + 1}</td>
+
+                    <td class="symbol">
+                        ${escapeHTML(item.symbol)}
+                    </td>
+
+                    <td>
+                        <span class="type">
+                            ${escapeHTML(contract)}
+                        </span>
+                    </td>
+
+                    <td class="price">
+                        ${formatNumber(price)}
+                    </td>
+
+                    <td>
+                        ${formatNumber(item.volume)}
+                    </td>
+
+                    <td>
+                        ${formatNumber(item.turnover)}
+                    </td>
+
+                    <td>
+                        ${escapeHTML(item.trading_status || item.state || "—")}
+                    </td>
+
+                </tr>
+            `;
+
+        }
+    ).join("");
+
+}
+
+
+async function loadMarkets() {
+
+    const status = document.getElementById(
+        "connectionStatus"
+    );
+
+    const table = document.getElementById(
+        "marketTable"
+    );
+
+    status.textContent = "● CONNECTING";
+
+    try {
+
+        const response = await fetch(
+            "/api/markets",
+            {
+                cache: "no-store"
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || data.ok !== true) {
+
+            throw new Error(
+                data.error || "API request failed"
+            );
+
+        }
+
+        if (!Array.isArray(data.markets)) {
+
+            throw new Error(
+                "Invalid markets response"
+            );
+
+        }
+
+        allMarkets = data.markets;
+
+        document.getElementById(
+            "totalPairs"
+        ).textContent = data.count;
+
+        document.getElementById(
+            "tickerPairs"
+        ).textContent = data.ticker_count;
+
+        status.textContent = "● CONNECTED";
+
+        document.getElementById(
+            "lastUpdated"
+        ).textContent =
+            "Last updated: " +
+            new Date(data.updated_at).toLocaleString();
+
+        renderMarkets();
+
+    } catch (error) {
+
+        status.textContent = "● API ERROR";
+
+        table.innerHTML = `
+            <tr>
+                <td colspan="7" class="message">
+                    Market data unavailable:
+                    ${escapeHTML(error.message)}
+                </td>
+            </tr>
+        `;
+
+    }
+
+}
+
+
+document.getElementById(
+    "searchInput"
+).addEventListener(
+    "input",
+    renderMarkets
+);
+
+
+document.getElementById(
+    "typeFilter"
+).addEventListener(
+    "change",
+    renderMarkets
+);
+
+
+document.getElementById(
+    "sortFilter"
+).addEventListener(
+    "change",
+    renderMarkets
+);
+
+
+loadMarkets();
+
+</script>
+
+</body>
+</html>
