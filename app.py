@@ -9,15 +9,17 @@ import logging
 app = Flask(__name__)
 
 DELTA_API = "https://api.india.delta.exchange"
-TIMEOUT_SECONDS = 15
+TIMEOUT = 15
 
-CONTRACT_TYPES = (
+CONTRACT_TYPES = {
     "futures",
     "perpetual_futures"
-)
+}
 
 SESSION = requests.Session()
-SESSION.headers.update({"Accept": "application/json"})
+SESSION.headers.update({
+    "Accept": "application/json"
+})
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,79 +27,128 @@ logging.basicConfig(level=logging.INFO)
 def delta_get(path, params=None):
 
     response = SESSION.get(
-        f"{DELTA_API}{path}",
+        DELTA_API + path,
         params=params,
-        timeout=TIMEOUT_SECONDS
+        timeout=TIMEOUT
     )
 
     response.raise_for_status()
 
-    payload = response.json()
+    data = response.json()
 
-    if payload.get("success") is not True:
+    if data.get("success") is not True:
         raise ValueError(
-            f"Delta API error: {payload.get('error')}"
+            str(data.get("error", "Delta API error"))
         )
 
-    return payload
+    return data
 
 
-def get_all_active_products():
+def get_all_products():
 
-    products = []
+    all_products = []
     after = None
     seen = set()
 
-    for _ in range(100):
+    for page_number in range(100):
 
         params = {
-            "contract_types": ",".join(CONTRACT_TYPES),
-            "states": "live",
             "page_size": 100
         }
 
         if after:
             params["after"] = after
 
-        payload = delta_get(
+        data = delta_get(
             "/v2/products",
             params=params
         )
 
-        page = payload.get("result", [])
+        page = data.get("result", [])
 
         if not isinstance(page, list):
-            raise ValueError("Invalid products response")
+            raise ValueError(
+                "Products response is not a list"
+            )
 
-        for product in page:
+        all_products.extend(page)
 
-            if not isinstance(product, dict):
-                continue
+        meta = data.get("meta") or {}
+        next_cursor = meta.get("after")
 
-            # Delta product field is contract_type
-            if product.get("state") != "live":
-                continue
-
-            if product.get("contract_type") not in CONTRACT_TYPES:
-                continue
-
-            if product.get("symbol"):
-                products.append(product)
-
-        cursor = (payload.get("meta") or {}).get("after")
-
-        if not cursor or cursor in seen or not page:
+        if not next_cursor:
             break
 
-        seen.add(cursor)
-        after = cursor
+        if next_cursor in seen:
+            break
+
+        if not page:
+            break
+
+        seen.add(next_cursor)
+        after = next_cursor
+
+    return all_products
+
+
+def get_contract_type(product):
+
+    value = (
+        product.get("contract_type")
+        or product.get("product_type")
+        or product.get("type")
+        or ""
+    )
+
+    return str(value).strip().lower()
+
+
+def get_active_futures(products):
+
+    selected = []
+
+    for product in products:
+
+        if not isinstance(product, dict):
+            continue
+
+        state = str(
+            product.get("state", "")
+        ).lower()
+
+        contract_type = get_contract_type(product)
+
+        if state != "live":
+            continue
+
+        if contract_type not in CONTRACT_TYPES:
+            continue
+
+        if not product.get("symbol"):
+            continue
+
+        selected.append(product)
 
     unique = {
-        item["symbol"]: item
-        for item in products
+        str(item["symbol"]).upper(): item
+        for item in selected
     }
 
     return list(unique.values())
+
+
+def get_all_tickers():
+
+    data = delta_get("/v2/tickers")
+
+    result = data.get("result", [])
+
+    if not isinstance(result, list):
+        raise ValueError(
+            "Ticker response is not a list"
+        )
+
+    return result
 
 
 @app.route("/")
@@ -114,35 +165,36 @@ def markets():
 
     try:
 
-        # Fetch all active Futures and Perpetual products
-        products = get_all_active_products()
+        # Step 1: Fetch all products without filters
+        all_products = get_all_products()
 
-        # Fetch live tickers
-        ticker_payload = delta_get(
-            "/v2/tickers",
-            params={
-                "contract_types": ",".join(CONTRACT_TYPES)
-            }
+        # Step 2: Select live Futures and Perpetual Futures
+        active_products = get_active_futures(
+            all_products
         )
 
-        tickers = ticker_payload.get("result", [])
-
-        if not isinstance(tickers, list):
-            raise ValueError("Invalid ticker response")
+        # Step 3: Fetch all public tickers
+        all_tickers = get_all_tickers()
 
         ticker_map = {
             str(item.get("symbol", "")).upper(): item
-            for item in tickers
-            if isinstance(item, dict) and item.get("symbol")
+            for item in all_tickers
+            if isinstance(item, dict)
+            and item.get("symbol")
         }
 
         market_data = []
 
-        for product in products:
+        for product in active_products:
 
-            symbol = product["symbol"].upper()
+            symbol = str(
+                product["symbol"]
+            ).upper()
 
-            ticker = ticker_map.get(symbol, {})
+            ticker = ticker_map.get(
+                symbol,
+                {}
+            )
 
             market_data.append({
 
@@ -150,25 +202,37 @@ def markets():
 
                 "product_id": product.get("id"),
 
-                "contract_type": product.get("contract_type"),
-
-                "underlying_asset": product.get("underlying_asset"),
+                "contract_type": get_contract_type(
+                    product
+                ),
 
                 "state": product.get("state"),
 
-                "trading_status": product.get("trading_status"),
+                "trading_status": product.get(
+                    "trading_status"
+                ),
 
-                "mark_price": ticker.get("mark_price"),
+                "underlying_asset": product.get(
+                    "underlying_asset"
+                ),
+
+                "mark_price": ticker.get(
+                    "mark_price"
+                ),
 
                 "close": ticker.get("close"),
 
-                "last_price": ticker.get("last_price"),
+                "last_price": ticker.get(
+                    "last_price"
+                ),
 
                 "volume": ticker.get("volume"),
 
                 "turnover": ticker.get("turnover"),
 
-                "open_interest": ticker.get("open_interest"),
+                "open_interest": ticker.get(
+                    "open_interest"
+                ),
 
                 "high": ticker.get("high"),
 
@@ -198,43 +262,120 @@ def markets():
 
             "updated_at": datetime.now().astimezone().isoformat(),
 
+            "total_products": len(all_products),
+
             "count": len(market_data),
 
             "ticker_count": ticker_count,
 
-            "contract_types": list(CONTRACT_TYPES),
+            "contract_types": list(
+                CONTRACT_TYPES
+            ),
 
             "markets": market_data
 
         })
 
-    except requests.Timeout:
-
-        return jsonify({
-            "ok": False,
-            "error": "Delta API timeout"
-        }), 504
-
     except requests.RequestException:
 
         app.logger.exception(
-            "Delta API connection error"
+            "Delta API connection failed"
         )
 
         return jsonify({
             "ok": False,
-            "error": "Delta Exchange connection failed"
+            "error": "Delta API connection failed"
         }), 502
 
     except (ValueError, TypeError, KeyError):
 
         app.logger.exception(
-            "Market data processing error"
+            "Market processing failed"
         )
 
         return jsonify({
             "ok": False,
             "error": "Market data processing failed"
+        }), 502
+
+
+@app.route("/api/markets/debug")
+def markets_debug():
+
+    try:
+
+        products = get_all_products()
+
+        type_counts = {}
+        state_counts = {}
+
+        for product in products:
+
+            if not isinstance(product, dict):
+                continue
+
+            contract_type = get_contract_type(
+                product
+            ) or "missing"
+
+            state = str(
+                product.get("state", "missing")
+            ).lower()
+
+            type_counts[contract_type] = (
+                type_counts.get(contract_type, 0) + 1
+            )
+
+            state_counts[state] = (
+                state_counts.get(state, 0) + 1
+            )
+
+        active = get_active_futures(products)
+
+        tickers = get_all_tickers()
+
+        return jsonify({
+
+            "ok": True,
+
+            "updated_at": datetime.now().astimezone().isoformat(),
+
+            "total_products": len(products),
+
+            "active_futures_and_perpetuals": len(active),
+
+            "total_tickers": len(tickers),
+
+            "contract_type_counts": type_counts,
+
+            "state_counts": state_counts,
+
+            "sample_products": products[:5],
+
+            "sample_tickers": tickers[:5]
+
+        })
+
+    except requests.RequestException:
+
+        app.logger.exception(
+            "Debug API connection failed"
+        )
+
+        return jsonify({
+            "ok": False,
+            "error": "Delta API connection failed"
+        }), 502
+
+    except (ValueError, TypeError, KeyError):
+
+        app.logger.exception(
+            "Debug processing failed"
+        )
+
+        return jsonify({
+            "ok": False,
+            "error": "Debug processing failed"
         }), 502
 
 
@@ -257,7 +398,10 @@ def historical_candles():
         "6h", "12h", "1d", "1w"
     }
 
-    if not re.fullmatch(r"[A-Z0-9-]{2,40}", symbol):
+    if not re.fullmatch(
+        r"[A-Z0-9-]{2,40}",
+        symbol
+    ):
 
         return jsonify({
             "ok": False,
@@ -274,7 +418,10 @@ def historical_candles():
     try:
 
         end = int(
-            request.args.get("end", time.time())
+            request.args.get(
+                "end",
+                time.time()
+            )
         )
 
         start = int(
@@ -284,14 +431,17 @@ def historical_candles():
             )
         )
 
-        if start >= end or end - start > 2 * 365 * 86400:
+        if (
+            start >= end
+            or end - start > 2 * 365 * 86400
+        ):
 
             return jsonify({
                 "ok": False,
                 "error": "Invalid time range"
             }), 400
 
-        payload = delta_get(
+        data = delta_get(
             "/v2/history/candles",
             params={
                 "symbol": symbol,
@@ -301,7 +451,7 @@ def historical_candles():
             }
         )
 
-        candles = payload.get("result")
+        candles = data.get("result", [])
 
         if not isinstance(candles, list):
 
@@ -345,6 +495,8 @@ if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", "5000")),
+        port=int(
+            os.environ.get("PORT", "5000")
+        ),
         debug=False
     )
